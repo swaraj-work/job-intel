@@ -31,8 +31,8 @@ export function validLead(lead) {
   const name = (lead.name || '').trim();
   if (name.length < 2 || name.length > 60) return false;
   const lc = name.toLowerCase();
-  if (cfg.blocklist.some((b) => b.toLowerCase() === lc)) return false;
-  if (cfg.competitors.some((b) => b.toLowerCase() === lc)) return false;
+  if ((cfg.blocklist || []).some((b) => b.toLowerCase() === lc)) return false;
+  if ((cfg.competitors || []).some((b) => b.toLowerCase() === lc)) return false;
   if (!normName(name)) return false;
   return true;
 }

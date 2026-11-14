@@ -336,13 +336,29 @@ function renderDrawer(l) {
 
   $('#dMarkSent').onclick = async () => {
     try {
-      await api(`/leads/${l.id}/mark-sent`, { method: 'POST' });
+      const subject = $('#dOutreachSubject').value;
+      const body = $('#dOutreachBody').value;
+      await api(`/leads/${l.id}/mark-sent`, { method: 'POST', body: { subject, body } });
       toast('Logged in Daily 20 outbound! Application status set to Sent.');
       loadStats();
       const fresh = await api(`/leads/${l.id}`);
       renderDrawer(fresh);
     } catch (err) {
       toast(err.message);
+    }
+  };
+
+  $('#dOutreachSubject').onblur = async (ev) => {
+    if (ev.target.value !== l.outreachSubject) {
+      await api(`/leads/${l.id}/application`, { method: 'PATCH', body: { outreachSubject: ev.target.value } });
+      l.outreachSubject = ev.target.value;
+    }
+  };
+
+  $('#dOutreachBody').onblur = async (ev) => {
+    if (ev.target.value !== l.emailDraft) {
+      await api(`/leads/${l.id}/application`, { method: 'PATCH', body: { emailDraft: ev.target.value } });
+      l.emailDraft = ev.target.value;
     }
   };
 

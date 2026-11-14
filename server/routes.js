@@ -2,7 +2,7 @@ import express from 'express';
 import { q, J, nowIso, getSetting, setSetting } from './db.js';
 import { getConfig, saveConfig, resetConfig, DEFAULT_CONFIG } from './config.js';
 import { computeScore, rescore, rescoreAll } from './pipeline/score.js';
-import { enrichCompany } from './pipeline/enrich.js';
+import { enrichCompany, heuristicPitch } from './pipeline/enrich.js';
 import { fetchSource, SOURCE_KINDS } from './sources/index.js';
 import { runSource, runAllNow, runningSources, ingest } from './scheduler.js';
 import { agentCycle, lookalike } from './agent.js';
@@ -47,17 +47,24 @@ function companyView(c, events, checkpoint) {
   const signals = [...new Set(ev.flatMap((e) => J(e.signals, [])))].slice(0, 6);
   const enr = J(c.enrichment, null);
   const techStack = J(c.tech_stack, enr?.techStack || []);
+  let emailDraft = c.email_draft || c.pitch;
+  let outreachSubject = c.outreach_subject;
+  if (!emailDraft) {
+    const fallback = heuristicPitch(c, ev, primary);
+    emailDraft = fallback.body;
+    if (!outreachSubject) outreachSubject = fallback.subject;
+  }
   return {
     id: c.id, name: c.name, sector: c.sector, city: c.city, description: c.description, website: c.website, domain: c.domain, logo: c.logo,
     size: c.size, sellsIntl: c.sells_intl, markets: J(c.markets, []), status: c.status, feedback: c.feedback, score: c.score,
-    breakdown: J(c.breakdown, []), why: c.why, pitch: c.pitch, notes: c.notes, confidence: c.confidence,
+    breakdown: J(c.breakdown, []), why: c.why, pitch: emailDraft, notes: c.notes, confidence: c.confidence,
     firstSeenAt: c.first_seen_at, lastEventAt: c.last_event_at, enrichedAt: c.enriched_at,
     applicationStatus: c.application_status || 'new',
     sentAt: c.sent_at || null,
     followUpAt: c.follow_up_at || null,
     techStack,
-    emailDraft: c.email_draft || c.pitch,
-    outreachSubject: c.outreach_subject || null,
+    emailDraft,
+    outreachSubject,
     roleMatch: c.role_match || null,
     enrichment: enr ? { found: enr.found, url: enr.url, title: enr.title, techStack: enr.techStack || techStack, ats: enr.ats, careersLink: enr.careersLink, social: enr.social, locales: enr.hreflangs?.length || 0 } : null,
     funding: funding ? { stage: funding.stage, amount: funding.amount_text || fmtUsdM(funding.amount_usd_m), date: funding.occurred_at, investors: J(funding.investors, []), type: funding.type } : null,
@@ -208,17 +215,25 @@ api.get('/leads.csv', wrap((req, res) => {
   const { sql, p, order } = leadQuery(req.query);
   const rows = q.all(`SELECT c.* ${sql} ORDER BY ${order} LIMIT 5000`, ...p);
   const evs = eventsFor(rows.map((r) => r.id));
-  const cols = ['name', 'score', 'sector', 'city', 'website', 'status', 'stage', 'amount', 'funding_date', 'team_size', 'contact_name', 'contact_role', 'contact_email', 'email_status', 'reach_out_to', 'markets', 'signals', 'payment_stack', 'why', 'pitch', 'source_url'];
+  const cols = ['name', 'score', 'application_status', 'sector', 'city', 'website', 'tech_stack', 'stage', 'amount', 'funding_date', 'team_size', 'contact_name', 'contact_role', 'contact_email', 'email_status', 'reach_out_to', 'why', 'cold_email_subject', 'cold_email_draft', 'source_url', 'sent_at'];
   const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
   const lines = [cols.join(',')];
   for (const c of rows) {
     const v = companyView(c, evs.get(c.id) || []);
     const pc = v._contacts.find((x) => x.id === v._primaryId);
-    lines.push([v.name, v.score, v.sector, v.city, v.website, v.status, v.funding?.stage, v.funding?.amount, v.funding?.date?.slice(0, 10),
-      v.team ? `${v.team.label}${v.team.exact ? '' : ' (est.)'}` : '', pc?.name, pc?.role, pc?.email, pc?.email_status, v.target.roles.join(' / '), v.markets.join('; '), v.signals.join('; '), v.enrichment?.providers?.join('; '), v.why, v.pitch, v.latest?.url].map(esc).join(','));
+    lines.push([
+      v.name, v.score, v.applicationStatus, v.sector, v.city, v.website,
+      (v.techStack || []).join('; '),
+      v.funding?.stage, v.funding?.amount, v.funding?.date?.slice(0, 10),
+      v.team ? `${v.team.label}${v.team.exact ? '' : ' (est.)'}` : '',
+      pc?.name, pc?.role, pc?.email, pc?.email_status,
+      v.target.roles.join(' / '),
+      v.why, v.outreachSubject, v.emailDraft,
+      v.latest?.url, v.sentAt ? v.sentAt.slice(0, 10) : ''
+    ].map(esc).join(','));
   }
   res.setHeader('content-type', 'text/csv; charset=utf-8');
-  res.setHeader('content-disposition', `attachment; filename="payglocal-leads-${new Date().toISOString().slice(0, 10)}.csv"`);
+  res.setHeader('content-disposition', `attachment; filename="jobintel-pipeline-${new Date().toISOString().slice(0, 10)}.csv"`);
   res.send(lines.join('\n'));
 }));
 

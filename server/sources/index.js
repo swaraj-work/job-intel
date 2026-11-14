@@ -47,7 +47,7 @@ async function redditOAuth(p) {
       headers: {
         authorization: `Basic ${Buffer.from(`${process.env.REDDIT_CLIENT_ID}:${process.env.REDDIT_CLIENT_SECRET}`).toString('base64')}`,
         'content-type': 'application/x-www-form-urlencoded',
-        'user-agent': 'PayGlocalLeadIntel/1.0',
+        'user-agent': 'JobIntelEngine/1.0',
       },
       body: 'grant_type=client_credentials',
     });
@@ -70,7 +70,7 @@ async function redditOAuth(p) {
       meta: { sub: d.subreddit, score: d.score, comment: true },
     }));
   }
-  return (data?.data?.children || []).map((c) => c.data).filter((d) => !/^\[(for hire|hiring|meta|mod)\]/i.test(d.title)).map((d) => ({
+  return (data?.data?.children || []).map((c) => c.data).filter((d) => !/^\[(for hire|meta|mod)\]/i.test(d.title)).map((d) => ({
     url: `https://www.reddit.com${d.permalink}`,
     title: d.title,
     summary: clip(d.selftext || '', 1500),
@@ -111,7 +111,7 @@ const kinds = {
     const { text } = await fetchText(url);
     // Comment feed titles read "/u/name on Post title"; keep only the post title (no usernames stored).
     if (p.comments) return parseFeed(text).map((i) => ({ ...i, title: i.title.replace(/^\/?u\/\S+ on /, ''), summary: clip(i.summary, 1500), meta: { sub: p.sub, comment: true } }));
-    return parseFeed(text).filter((i) => !/^r\/\w+$/.test(i.title) && !/^\[(for hire|hiring|meta|mod)\]/i.test(i.title)).map((i) => ({ ...i, summary: clip(i.summary.replace(/submitted by .*$/i, '').trim(), 1500), meta: { ...i.meta, sub: p.sub } }));
+    return parseFeed(text).filter((i) => !/^r\/\w+$/.test(i.title) && !/^\[(for hire|meta|mod)\]/i.test(i.title)).map((i) => ({ ...i, summary: clip(i.summary.replace(/submitted by .*$/i, '').trim(), 1500), meta: { ...i.meta, sub: p.sub } }));
   },
 
   async hn(p) {

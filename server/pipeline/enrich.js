@@ -119,25 +119,38 @@ export function heuristicPitch(company, events, contact = null) {
   // 1. Hook
   let hook;
   if (f) {
-    hook = `Saw that ${company.name} just raised a ${f.stage || 'Seed'} round${f.amount_usd_m ? ` (${fmtUsdM(f.amount_usd_m)})` : ''} — huge congratulations!`;
+    const amt = f.amount_usd_m ? fmtUsdM(f.amount_usd_m) : f.amount_text || '';
+    hook = `Saw that ${company.name} just raised a ${f.stage || 'Seed'} round${amt ? ` (${amt})` : ''} — huge congratulations!`;
   } else if (dir) {
     hook = `Saw ${company.name} is part of Y Combinator — big congrats on the launch!`;
   } else if (h) {
     hook = `Saw that ${company.name} is looking to grow the engineering team — love what you're building.`;
   } else {
-    hook = `Came across ${company.name} recently and was really impressed by the product.`;
+    hook = `Came across ${company.name} recently and was really impressed by what your team is building.`;
   }
 
   // 2. Value + Proof
   const skillsStr = (cand.skills || ['TypeScript', 'React', 'Node.js']).slice(0, 3).join(', ');
   const links = [cand.portfolioUrl && `Portfolio: ${cand.portfolioUrl}`, cand.githubUrl && `GitHub: ${cand.githubUrl}`].filter(Boolean).join(' | ');
-  const value = `I'm a ${roleName.toLowerCase()} working primarily with ${skillsStr}. ${cand.oneLinerPitch || ''}`;
+  const value = `I'm a ${roleName.toLowerCase()} working primarily with ${skillsStr}. ${cand.oneLinerPitch || ''}`.trim();
   const proof = links ? `Quick proof of work: ${links}` : '';
 
   // 3. CTA
   const cta = `Would you be open to a quick 10-minute chat this week to see if I'd be a strong fit for your team?`;
 
-  const lines = [`Hi ${founderName},`, '', hook, value, proof, cta, '', `Best,\n${cand.name || 'Candidate'}`].filter(Boolean);
+  const lines = [
+    `Hi ${founderName},`,
+    '',
+    hook,
+    '',
+    value,
+    proof ? '' : null,
+    proof || null,
+    '',
+    cta,
+    '',
+    `Best,\n${cand.name || 'Candidate'}`
+  ].filter((x) => x !== null);
   const subject = f ? `congrats on the ${f.stage || 'Seed'} round / ${roleName.toLowerCase()}` : `engineer interested in ${company.name}`;
 
   return { subject, body: lines.join('\n') };

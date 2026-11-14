@@ -67,6 +67,7 @@ export const DEFAULT_CONFIG = {
     'Zomato', 'Swiggy', 'Ola', 'Byju', 'Bharti', 'Airtel', 'Jio', 'HDFC', 'ICICI', 'SBI', 'Axis', 'Kotak', 'Bajaj', 'Birla',
     'Vedanta', 'ITC', 'Hindustan Unilever', 'Larsen', 'L&T', 'Nykaa', 'PhonePe', 'Meesho', 'Zepto'
   ],
+  competitors: [],
   blocklist: [
     'Inc42', 'YourStory', 'Entrackr', 'TechCrunch', 'Economic Times', 'Moneycontrol', 'Mint', 'Reuters', 'Bloomberg',
     'Peak XV', 'Sequoia', 'Accel', 'Blume', 'Blume Ventures', 'Nexus', 'Elevation', 'Lightspeed', 'Matrix Partners', 'Kalaari',

@@ -90,8 +90,8 @@ function plausibleName(name, cfg) {
   if (/\b(startups?|companies|firms|brands|investors|government|centre|india|report|week|this|these|how|why|what|here)\b/i.test(name) && words.length > 1) return false;
   if (/\b(co-?founder|founder|ceo|minister|chairman|md|missile|ministry|mutual fund|govt|government)\b/i.test(name)) return false;
   const lc = name.toLowerCase();
-  if (cfg.blocklist.some((b) => b.toLowerCase() === lc)) return false;
-  if (cfg.competitors.some((b) => b.toLowerCase() === lc)) return false;
+  if ((cfg.blocklist || []).some((b) => b.toLowerCase() === lc)) return false;
+  if ((cfg.competitors || []).some((b) => b.toLowerCase() === lc)) return false;
   return true;
 }
 
@@ -130,8 +130,8 @@ function heuristicLead(item, source, cfg) {
   // Strip the company's own name so "ReFit Global" is not read as a global signal.
   const textNoName = text.split(name).join(' ');
   const markets = detectMarkets(textNoName);
-  const cfgPos = cfg.keywords.positive.filter((k) => new RegExp(`\\b${escapeRe(k)}\\b`, 'i').test(textNoName));
-  const competitors = cfg.competitors.filter((c) => new RegExp(`\\b${escapeRe(c)}\\b`, 'i').test(text));
+  const hiringSignals = (cfg.keywords?.hiring || []).filter((k) => new RegExp(`\\b${escapeRe(k)}\\b`, 'i').test(textNoName));
+  const competitors = (cfg.competitors || []).filter((c) => new RegExp(`\\b${escapeRe(c)}\\b`, 'i').test(text));
   const enterprise = isEnterpriseName(name, cfg) || (amount_usd_m || 0) > 150 || /\b(listed|nse|bse|pre-ipo)\b/i.test(text);
 
   return {
@@ -156,7 +156,7 @@ function heuristicLead(item, source, cfg) {
       amount_text: amountTxt,
       amount_usd_m,
       investors,
-      signals: [...new Set(cfgPos)].slice(0, 6),
+      signals: [...new Set(hiringSignals)].slice(0, 6),
       competitors,
     },
   };
