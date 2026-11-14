@@ -277,7 +277,7 @@ function renderDrawer(l) {
         </div>
         <div style="margin-bottom:12px;">
           <label class="muted small" style="display:block;margin-bottom:4px;">Cold Email Draft (Personalized & Under 5 Lines)</label>
-          <textarea class="input" id="dOutreachBody" rows="7" style="width:100%;font-family:inherit;font-size:13.5px;line-height:1.5;">${esc(draftBody)}</textarea>
+          <textarea class="outreach-textarea" id="dOutreachBody" spellcheck="false">${esc(draftBody)}</textarea>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
           <button class="btn primary gmail" id="dSendGmail">✉ Open in Gmail</button>

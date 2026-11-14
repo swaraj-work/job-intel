@@ -40,6 +40,7 @@ export const DEFAULT_CONFIG = {
     enterprise: -30,       // Large conglomerates with HR gatekeepers (TCS, Infosys, etc.)
     lateStage: -15,        // Series D+ / pre-IPO (hundreds of applicants per role)
     negativeNews: -25,     // Layoffs, shutdowns, insolvency
+    nonTech: -60,          // Food, restaurant, offline retail, non-tech businesses
   },
   preferredStages: ['Pre-Seed', 'Angel', 'Seed', 'Pre-Series A', 'Series A'],
   okStages: ['Series B', 'Grant', 'Bootstrapped'],
@@ -47,7 +48,8 @@ export const DEFAULT_CONFIG = {
   recencyHalfLifeDays: 14,
   sectors: {
     'AI': 1.0, 'SaaS': 1.0, 'DevTools': 1.0, 'Fintech': 0.95, 'Healthtech': 0.85,
-    'Edtech': 0.8, 'E-commerce': 0.8, 'Gaming': 0.8, 'Logistics': 0.75, 'Other': 0.7
+    'Edtech': 0.8, 'E-commerce': 0.8, 'Gaming': 0.8, 'Logistics': 0.75, 'Other': 0.3,
+    'F&B': 0.0, 'Retail & D2C': 0.1, 'Real Estate': 0.0, 'Agency': 0.2
   },
   keywords: {
     hiring: [

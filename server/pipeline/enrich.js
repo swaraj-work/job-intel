@@ -132,7 +132,7 @@ export function heuristicPitch(company, events, contact = null) {
   // 2. Value + Proof
   const skillsStr = (cand.skills || ['TypeScript', 'React', 'Node.js']).slice(0, 3).join(', ');
   const links = [cand.portfolioUrl && `Portfolio: ${cand.portfolioUrl}`, cand.githubUrl && `GitHub: ${cand.githubUrl}`].filter(Boolean).join(' | ');
-  const value = `I'm a ${roleName.toLowerCase()} working primarily with ${skillsStr}. ${cand.oneLinerPitch || ''}`.trim();
+  const value = `I'm a ${roleName.toLowerCase()} working primarily with ${skillsStr}. I build fast, scalable web apps and love early-stage teams where speed matters.`;
   const proof = links ? `Quick proof of work: ${links}` : '';
 
   // 3. CTA

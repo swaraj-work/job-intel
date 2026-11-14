@@ -89,7 +89,16 @@ export function computeScore(company, events, cfg = getConfig(), learned = getSe
   const hasEmail = contacts.length > 0;
   add('hasEmail', 'Contact Email Ready', hasEmail ? 1 : 0, hasEmail ? `Found ${contacts.length} verified contact(s)` : 'Email lookup pending');
 
-  // Penalties
+  // Penalties & non-tech business gate
+  const nonTechSectors = ['F&B', 'Real Estate', 'Retail & D2C'];
+  const isNonTech = nonTechSectors.includes(company.sector)
+    || /\b(pizza|pizzas|burger|burgers|cafe|cafes|coffee|restaurant|restaurants|cloud kitchen|kitchens|bakery|bakeries|food brand|beverage|dining|qsr|ice cream|chocolate|tea chain|sweet|mithai|biryani)\b/i.test(`${company.name} ${allText}`);
+  const hasTechRoles = hiringEvents.some((e) => /engineer|developer|tech|full[- ]?stack|backend|frontend|software|ai\b/i.test(`${e.title} ${e.summary || ''}`))
+    || (enr?.openRoles?.titles || []).some((t) => /engineer|developer|tech|full[- ]?stack|backend|frontend/i.test(t));
+
+  if (isNonTech && !hasTechRoles) {
+    parts.push({ key: 'nonTech', label: 'Non-tech business', points: P.nonTech || -60, max: 0, detail: `${company.sector || 'F&B/Retail'}: no software engineering roles` });
+  }
   if (company.size === 'enterprise' || isEnterpriseName(company.name, cfg)) {
     parts.push({ key: 'enterprise', label: 'Large enterprise', points: P.enterprise, max: 0, detail: 'Enterprise HR screening gate' });
   }
@@ -101,9 +110,10 @@ export function computeScore(company, events, cfg = getConfig(), learned = getSe
     parts.push({ key: 'negativeNews', label: 'Negative news', points: P.negativeNews, max: 0, detail: neg.join(', ') });
   }
 
+  const sectorWeight = cfg.sectors?.[company.sector] != null ? cfg.sectors[company.sector] : (cfg.sectors?.['Other'] || 0.3);
   let total = parts.reduce((s, p) => s + p.points, 0);
   const conf = Math.max(0.5, Math.min(1, company.confidence || 0.6));
-  total = Math.round(Math.max(0, Math.min(100, total * (0.8 + 0.2 * conf))));
+  total = Math.round(Math.max(0, Math.min(100, total * (0.8 + 0.2 * conf) * sectorWeight)));
   return { score: total, breakdown: parts, why: explain(company, events, parts, matchedSkills) };
 }
 

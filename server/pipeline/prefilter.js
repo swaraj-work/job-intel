@@ -25,6 +25,11 @@ export function prefilter(item, source) {
 
   if (hits.noise && !hits.funding && !hits.hiring) return { pass: false, reason: 'market noise', hits };
 
+  // Drop non-tech food / restaurant / retail funding unless explicit engineering/tech hiring is mentioned
+  const isFoodRetail = /\b(pizza|burger|cafe|coffee|restaurant|cloud kitchen|bakery|dining|qsr|ice cream|biryani|mithai|brewery|diner)\b/i.test(text);
+  const hasTechSignal = hits.hiring || /\b(software|tech|developer|engineer|app|platform|ai|saas|digital)\b/i.test(text);
+  if (isFoodRetail && !hasTechSignal) return { pass: false, reason: 'non-tech food/restaurant business', hits };
+
   const india = hits.india || source.params?.assumeIndia || /^(inc42|entrackr|yourstory|et-startups)/.test(source.id);
   const intent = hits.funding || hits.hiring || hits.launch || hits.expansion;
   if (!intent) return { pass: false, reason: 'no funding or hiring signal', hits };

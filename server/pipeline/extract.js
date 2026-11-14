@@ -6,12 +6,14 @@ import { peopleFromText, teamFromText } from './people.js';
 
 // ---------- shared vocab ----------
 export const SECTOR_RULES = [
+  ['F&B', /\b(pizza|pizzas|burger|burgers|cafe|cafes|coffee|restaurant|restaurants|cloud kitchen|kitchens|bakery|bakeries|food brand|beverage|beverages|brewery|dining|qsr|diner|ice cream|chocolate|tea chain|sweet|mithai|biryani|waffle|snack)\b/i],
+  ['Retail & D2C', /\b(d2c|direct-to-consumer|consumer brand|apparel|clothing|fashion|footwear|shoes|jewell?ery|eyewear|cosmetics|beauty|skincare|personal care|perfume|handicraft|furniture|ethnic wear|ayurved)\b/i],
+  ['Real Estate', /\b(real estate|realty|housing|builder|developers? (group|properties)|coworking)\b/i],
   ['Edtech', /\b(edtech|education|learning|upskill|test prep|students?|tutor|school|university|coaching)\b/i],
   ['Travel', /\b(travel|tourism|hotels?|hospitality|trips?|visa|flights?|holiday|traveltech)\b/i],
   ['Healthtech', /\b(health|healthtech|medtech|clinic|pharma|diagnostic|hospital|medical|wellness)\b/i],
   ['Fintech', /\b(fintech|lending|nbfc|insurtech|wealth|neobank|credit|loans?|payments? (app|startup|platform)|stock broking|trading app)\b/i],
   ['Gaming', /\b(gaming|game studio|games?|esports)\b/i],
-  ['D2C', /\b(d2c|direct-to-consumer|consumer brand|apparel|fashion|beauty|skincare|personal care|jewell?ery|footwear|snacks?|beverages?|home decor|furniture|ethnic wear|ayurved|nutrition|pet food|coffee|tea brand)\b/i],
   ['Exporter', /\b(exporters?|exports? (of|to)|export house|handicrafts?|textiles?|garments?|spices|seafood|carpets?|leather goods|gems?)\b/i],
   ['SaaS', /\b(saas|b2b software|software platform|crm|erp|api|devtools?|developer tools?|cloud|platform for (businesses|enterprises)|enterprise software|workflow|cybersecurity|security platform|observability|analytics platform)\b/i],
   ['Manufacturing', /\b(manufactur\w*|factory|industrial|electronics|semiconductors?|ev|electric vehicles?|drones?|aerospace|defence|robotics|hardware|chemicals?)\b/i],
