@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JobIntel · Founder Outreach & Opportunity Engine</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><path d='M16 3l11 6.3v12.4L16 28 5 21.7V9.3z' fill='none' stroke='%232563eb' stroke-width='3.5' stroke-linejoin='round'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <svg class="mark" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linejoin="round" stroke-linecap="round"><path d="M17 3l12.5 7.2v13.6L17 31 4.5 23.8V10.2z"/><path d="M22 14.5a5.5 5.5 0 1 0 0 5H17"/></svg>
+    <span>JobIntel</span><span class="brand-sub">/ Founder Outreach</span>
+  </div>
+  <nav class="tabs" id="tabs">
+    <a href="#brief" data-view="brief">Daily 20</a>
+    <a href="#leads" data-view="leads">Pipeline</a>
+    <a href="#reddit" data-view="reddit">Reddit Hiring</a>
+    <a href="#live" data-view="live">Live Stream</a>
+    <a href="#sources" data-view="sources">Sources</a>
+    <a href="#config" data-view="config">Profile & Config</a>
+  </nav>
+  <div class="top-actions">
+    <div class="quota-pill" id="quotaPill" title="Daily cold email target: 20/day"><span class="flame">🔥</span> <span id="quotaText">0 / 20 Sent Today</span></div>
+    <div class="engine" id="engine" title="Engine status"><span class="dot"></span><span id="engineText">Connecting…</span></div>
+    <button class="logout" id="logoutBtn" hidden>Sign out</button>
+    <button class="btn primary scan" id="scanBtn"><span class="spinner"></span><span>Scan now</span></button>
+  </div>
+</header>
+
+<main class="main">
+  <!-- BRIEF (THE DAILY 20) -->
+  <section class="view" id="view-brief">
+    <div class="hero">
+      <div>
+        <div class="eyebrow" id="briefEyebrow">Today's Selection</div>
+        <h1 id="briefTitle">Today's Top 20 Startup Targets</h1>
+        <p id="briefSub">Early-stage startups that just raised capital (Seed/Pre-Seed) or posted fresh hiring signals. Founders hire directly—send your 20 emails today.</p>
+      </div>
+      <div class="hero-actions">
+        <button class="btn ghost" id="undoAck" hidden>Undo</button>
+        <button class="btn" id="ackBrief">Mark batch as reviewed</button>
+      </div>
+    </div>
+    <section class="kpis" id="kpis"></section>
+    <div class="layout">
+      <section>
+        <div class="section-head"><h2>Today's High-Signal Opportunities</h2><span class="muted small" id="briefCount"></span></div>
+        <div class="cards" id="briefLeads"></div>
+      </section>
+      <aside class="side-col">
+        <div class="panel">
+          <div class="panel-head"><h3>Reddit Hiring Posts</h3><a href="#reddit" class="link small">View all</a></div>
+          <div id="briefIntel" class="intel-mini"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>Sector Distribution</h3><span class="muted small">startups · avg score</span></div>
+          <div id="sectorBars"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>Live Engine Activity</h3><a href="#live" class="link small">Live view</a></div>
+          <div id="miniFeed" class="feed mini"></div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- LEADS / PIPELINE -->
+  <section class="view" id="view-leads" hidden>
+    <div class="hero">
+      <div>
+        <div class="eyebrow">Outbound Tracking</div>
+        <h1>Application Pipeline</h1>
+        <p>Manage your outbound applications across all stages: to reach out, sent, replied, and interviewing.</p>
+      </div>
+      <div class="hero-actions"><a class="btn" id="csvBtn" href="/api/leads.csv">Export CSV</a></div>
+    </div>
+    <section class="toolbar">
+      <input class="input search" id="fQ" placeholder="Search startup, founder, city, stack…">
+      <select class="input" id="fAppStatus">
+        <option value="">All Applications</option>
+        <option value="new">To Reach Out</option>
+        <option value="sent">Email Sent</option>
+        <option value="replied">Replied</option>
+        <option value="interview">Interviewing</option>
+        <option value="offer">Offer Received</option>
+        <option value="rejected">Rejected</option>
+      </select>
+      <select class="input" id="fSector"><option value="">All sectors</option></select>
+      <select class="input" id="fStage"><option value="">Any stage</option><option>Pre-Seed</option><option>Angel</option><option>Seed</option><option>Pre-Series A</option><option>Series A</option><option>Series B</option></select>
+      <select class="input" id="fMin"><option value="">Any score</option><option value="40">40+</option><option value="50">50+</option><option value="60">60+</option><option value="70">70+</option></select>
+      <select class="input" id="fDays"><option value="">Any time</option><option value="1">Last 24h</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option></select>
+      <select class="input" id="fSort"><option value="">Sort: score</option><option value="recent">Sort: latest signal</option><option value="new">Sort: newest found</option><option value="name">Sort: name</option></select>
+      <label class="check"><input type="checkbox" id="fEnt" checked> Hide large enterprises</label>
+      <span class="spacer"></span><span class="muted small" id="leadCount"></span>
+    </section>
+    <div class="table" id="leadTable"></div>
+    <div class="pager"><button class="btn small" id="moreBtn" hidden>Load more</button></div>
+  </section>
+
+  <!-- REDDIT HIRING -->
+  <section class="view" id="view-reddit" hidden>
+    <div class="page-head">
+      <div>
+        <h1>Reddit Hiring Posts</h1>
+        <p>Fresh "we're hiring" and developer posts from startup and developer subreddits, scored for direct founder access.</p>
+      </div>
+      <div class="seg" id="rdMode" role="tablist" aria-label="View"><button data-mode="inbox">Active Posts</button><button data-mode="insights">Weekly Insights</button></div>
+    </div>
+    <div id="rdInbox">
+      <div class="filters">
+        <div class="seg" id="rdStatus" role="tablist" aria-label="Status"></div>
+        <span class="spacer"></span>
+        <input class="input sm search-sm" id="rdQ" type="search" placeholder="Search threads" aria-label="Search threads">
+        <select class="input sm" id="rdBand" aria-label="Priority"></select>
+      </div>
+      <div class="inbox" id="rdBox">
+        <div class="ib-list" id="rdList" role="listbox" aria-label="Threads"></div>
+        <aside class="ib-detail" id="rdDetail" aria-live="polite"></aside>
+      </div>
+    </div>
+    <div id="rdInsights" hidden></div>
+  </section>
+
+  <!-- LIVE -->
+  <section class="view" id="view-live" hidden>
+    <div class="hero">
+      <div>
+        <div class="eyebrow">24/7 Discovery Engine</div>
+        <h1>Live Pipeline</h1>
+        <p>Scans news feeds, Google News, YC, and Reddit in real time. Deduplicates, scores, and extracts founder contacts.</p>
+      </div>
+      <div class="hero-actions"><button class="btn" id="agentBtn">Run discovery agent now</button></div>
+    </div>
+    <section class="funnel" id="funnel"></section>
+    <div class="layout">
+      <div class="panel"><div class="panel-head"><h3>Live Ingestion Activity</h3><span class="muted small" id="liveCount"></span></div><div class="feed" id="liveFeed"></div></div>
+      <aside class="side-col">
+        <div class="panel"><div class="panel-head"><h3>LLM Extraction</h3></div><div id="llmPanel" class="kv"></div></div>
+        <div class="panel"><div class="panel-head"><h3>Source Scan History</h3></div><div id="runsPanel" class="runs"></div></div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- SOURCES -->
+  <section class="view" id="view-sources" hidden>
+    <div class="hero">
+      <div>
+        <div class="eyebrow">Source Ingestion</div>
+        <h1>Opportunity Sources</h1>
+        <p>Funding feeds, Google News searches, Y Combinator, and subreddits monitored around the clock.</p>
+      </div>
+    </div>
+    <div class="panel add-source">
+      <div class="panel-head"><h3>Add a custom source</h3><span class="muted small">Validated with a live fetch before saving</span></div>
+      <form id="addSource" class="add-grid">
+        <select class="input" name="kind" id="srcKind">
+          <option value="rss">RSS / Atom feed</option>
+          <option value="gnews">Google News query</option>
+          <option value="reddit">Reddit subreddit</option>
+          <option value="hn">Hacker News search</option>
+        </select>
+        <input class="input grow" name="value" id="srcValue" placeholder="https://example.com/feed or query" required>
+        <select class="input" name="category"><option value="leads">Startups / Funding</option><option value="voice">Hiring Posts</option><option value="intel">Market Trends</option></select>
+        <input class="input" name="name" placeholder="Display name (optional)">
+        <button type="button" class="btn" id="testSrc">Test</button>
+        <button class="btn primary">Add source</button>
+      </form>
+      <div id="srcTest" class="src-test"></div>
+    </div>
+    <div class="table sources" id="sourceTable"></div>
+  </section>
+
+  <!-- CONFIG & CANDIDATE PROFILE -->
+  <section class="view" id="view-config" hidden>
+    <div class="hero">
+      <div>
+        <div class="eyebrow">Your Strategy & Profile</div>
+        <h1>Candidate Profile & Scoring Model</h1>
+        <p>Customize your target roles, skills, portfolio links, and 20-emails/day outbound settings.</p>
+      </div>
+      <div class="hero-actions">
+        <button class="btn ghost" id="cfgReset">Reset to defaults</button>
+        <button class="btn" id="cfgPreview">Preview impact</button>
+        <button class="btn primary" id="cfgSave">Save settings</button>
+      </div>
+    </div>
+
+    <!-- Candidate Profile Section -->
+    <div class="panel candidate-card" style="margin-bottom:20px;">
+      <div class="panel-head"><h3>Candidate Profile (Injected into Cold Emails)</h3><span class="muted small">Powers the &lt;5-line email generator</span></div>
+      <form id="candidateForm" class="candidate-grid">
+        <div class="field">
+          <label>Your Name</label>
+          <input class="input" id="candName" placeholder="e.g. Alex Kumar">
+        </div>
+        <div class="field">
+          <label>Daily Email Target</label>
+          <input class="input" type="number" id="candDailyTarget" value="20" min="1" max="100">
+        </div>
+        <div class="field full">
+          <label>Target Roles (comma-separated)</label>
+          <input class="input" id="candRoles" placeholder="Founding Engineer, Full Stack Developer, Backend Engineer">
+        </div>
+        <div class="field full">
+          <label>Core Tech Skills (comma-separated)</label>
+          <input class="input" id="candSkills" placeholder="TypeScript, React, Node.js, Python, PostgreSQL, Next.js">
+        </div>
+        <div class="field">
+          <label>Portfolio / Demo URL</label>
+          <input class="input" id="candPortfolio" placeholder="https://yourportfolio.dev">
+        </div>
+        <div class="field">
+          <label>GitHub URL</label>
+          <input class="input" id="candGithub" placeholder="https://github.com/yourusername">
+        </div>
+        <div class="field">
+          <label>LinkedIn URL</label>
+          <input class="input" id="candLinkedin" placeholder="https://linkedin.com/in/yourusername">
+        </div>
+        <div class="field">
+          <label>Experience & Location</label>
+          <input class="input" id="candExp" placeholder="2-4 yrs / Bangalore & Remote">
+        </div>
+        <div class="field full">
+          <label>One-Liner Value Pitch (Short & Punchy)</label>
+          <input class="input" id="candPitch" placeholder="Full-stack engineer who builds fast, scalable web apps and AI tools.">
+        </div>
+        <div class="row-end full">
+          <button type="button" class="btn primary" id="saveCandidateBtn">Update Profile</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="config-grid" id="configForm"></div>
+    <div class="panel" id="previewPanel" hidden><div class="panel-head"><h3>Impact preview</h3><span class="muted small" id="previewSummary"></span></div><div id="previewTable"></div></div>
+    <details class="panel raw"><summary>Advanced: raw JSON config</summary><textarea id="cfgRaw" spellcheck="false"></textarea><div class="row-end"><button class="btn small" id="cfgRawApply">Apply JSON</button></div></details>
+  </section>
+</main>
+
+<div class="drawer-wrap" id="drawerWrap"><aside class="drawer" id="drawer"></aside></div>
+<div class="toast" id="toast"></div>
+<script src="/app.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+{
+  "name": "jobintel-outbound-engine",
+  "version": "1.0.0",
+  "description": "Automated startup founder outreach and job opportunity discovery engine (20 emails/day strategy)",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server/index.js",
+    "dev": "node --disable-warning=ExperimentalWarning --watch server/index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "express": "^5.2.1",
+    "fast-xml-parser": "^5.11.2"
+  },
+  "engines": {
+    "node": ">=22.5"
+  }
+}
