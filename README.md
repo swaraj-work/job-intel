@@ -68,13 +68,16 @@ Key configuration options:
 - `PORT`: Server port (default: `4300`)
 - `GROQ_API_KEY` or `GEMINI_API_KEY`: Enables LLM extraction and bespoke email personalization (if omitted, high-speed heuristic rules run with zero cost).
 - `APOLLO_API_KEY` or `HUNTER_API_KEY`: Enables automatic verified founder work email lookups.
-- `AUTH_PASSWORD`: Optional password protection for public/hosted deployments.
+- `AUTH_USERNAME` and `AUTH_PASSWORD` configure sign-in. Both default to `admin` when blank. Set a private password in Railway's service variables before exposing real lead data.
+- `SESSION_SECRET` can be set to a random secret to keep sessions valid across restarts.
 
 ### 4. Run the Engine
 ```bash
 npm start
 ```
 Open [http://localhost:4300](http://localhost:4300) in your browser.
+
+If Railway's install step reports the npm production config warning, remove `NPM_CONFIG_PRODUCTION` from the service variables and use `NPM_CONFIG_OMIT=dev` for production-only installs.
 
 ---
 

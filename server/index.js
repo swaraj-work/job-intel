@@ -25,14 +25,10 @@ for (const s of SEED_SOURCES) {
 }
 for (const id of RETIRED_SOURCES) q.run(`UPDATE sources SET enabled = 0 WHERE id = ? AND created_by = 'system'`, id);
 
-// Public mode: any hosted environment (Railway sets PORT and RAILWAY_*), or an explicit HOST.
+// Hosted environments listen on all interfaces by default.
 const PUBLIC = Boolean(process.env.RAILWAY_ENVIRONMENT || process.env.PUBLIC_MODE === '1' || process.env.NODE_ENV === 'production');
-const AUTH_PASSWORD = process.env.AUTH_PASSWORD || '';
-
-if (PUBLIC && !AUTH_PASSWORD && process.env.ALLOW_NO_AUTH !== '1') {
-  console.error('Refusing to start publicly without auth: this app exposes lead data and editable config. Set AUTH_PASSWORD, or ALLOW_NO_AUTH=1 to override.');
-  process.exit(1);
-}
+const AUTH_USERNAME = process.env.AUTH_USERNAME || 'admin';
+const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'admin';
 
 const safeEq = (a, b) => {
   const ha = crypto.createHash('sha256').update(String(a)).digest();
@@ -40,10 +36,11 @@ const safeEq = (a, b) => {
   return crypto.timingSafeEqual(ha, hb);
 };
 
-// Password-only login with a signed, HttpOnly session cookie. Changing the password (or SESSION_SECRET) logs everyone out.
+// Changing the credentials or signing secret invalidates existing sessions.
 const COOKIE = 'lis';
 const SESSION_DAYS = 30;
-const SECRET = process.env.SESSION_SECRET || crypto.createHash('sha256').update(`leadintel:${AUTH_PASSWORD}`).digest('hex');
+const SECRET = crypto.createHmac('sha256', process.env.SESSION_SECRET || crypto.randomBytes(32))
+  .update(JSON.stringify([AUTH_USERNAME, AUTH_PASSWORD])).digest();
 const sign = (v) => crypto.createHmac('sha256', SECRET).update(v).digest('base64url');
 const makeToken = () => { const exp = String(Date.now() + SESSION_DAYS * 86400000); return `${exp}.${sign(exp)}`; };
 function validToken(t) {
@@ -51,7 +48,7 @@ function validToken(t) {
   return Boolean(exp && sig && Number(exp) > Date.now() && safeEq(sig, sign(exp)));
 }
 const cookieOf = (req) => (req.headers.cookie || '').split(/;\s*/).map((c) => c.split('=')).find(([k]) => k === COOKIE)?.[1];
-const authed = (req) => !AUTH_PASSWORD || validToken(cookieOf(req));
+const authed = (req) => validToken(cookieOf(req));
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 // Brute-force guard: 8 failed attempts per IP per 15 minutes.
@@ -66,9 +63,14 @@ app.use(express.json({ limit: '1mb' }));
 
 app.get('/login', (req, res) => (authed(req) ? res.redirect('/') : res.sendFile(path.join(here, 'login.html'))));
 app.post('/auth/login', (req, res) => {
-  if (!AUTH_PASSWORD) return res.json({ ok: true });
   if (tooMany(req.ip)) return res.status(429).json({ error: 'Too many attempts. Try again in a few minutes.' });
-  if (!safeEq(req.body?.password ?? '', AUTH_PASSWORD)) { noteFail(req.ip); return res.status(401).json({ error: 'Incorrect password' }); }
+  const { username, password } = req.body ?? {};
+  const validUsername = typeof username === 'string' && safeEq(username, AUTH_USERNAME);
+  const validPassword = typeof password === 'string' && safeEq(password, AUTH_PASSWORD);
+  if (!validUsername || !validPassword) {
+    noteFail(req.ip);
+    return res.status(401).json({ error: 'Incorrect username or password' });
+  }
   fails.delete(req.ip);
   res.cookie(COOKIE, makeToken(), { httpOnly: true, sameSite: 'lax', secure: req.secure, maxAge: SESSION_DAYS * 86400000, path: '/' });
   res.json({ ok: true });
