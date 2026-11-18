@@ -61,6 +61,9 @@ app.disable('x-powered-by');
 app.set('trust proxy', 1); // behind Railway's proxy
 app.use(express.json({ limit: '1mb' }));
 
+for (const asset of ['theme.js', 'theme.css']) {
+  app.get('/' + asset, (req, res) => res.sendFile(path.join(here, '..', 'public', asset)));
+}
 app.get('/login', (req, res) => (authed(req) ? res.redirect('/') : res.sendFile(path.join(here, 'login.html'))));
 app.post('/auth/login', (req, res) => {
   if (tooMany(req.ip)) return res.status(429).json({ error: 'Too many attempts. Try again in a few minutes.' });

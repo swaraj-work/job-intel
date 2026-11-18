@@ -49,7 +49,13 @@ function route() {
     const el = $(`#view-${x}`);
     if (el) el.hidden = x !== view;
   }
-  $$('#tabs a').forEach((a) => a.classList.toggle('active', a.dataset.view === view));
+  const section = { reddit: 'jobs', live: 'sources' }[view] || view;
+  for (const a of $$('#tabs a')) {
+    const active = a.dataset.view === section;
+    a.classList.toggle('active', active);
+    if (active) a.setAttribute('aria-current', view === section ? 'page' : 'location');
+    else a.removeAttribute('aria-current');
+  }
   const viewLoaders = {
     jobs: loadJobs,
     brief: loadBrief,
@@ -85,17 +91,18 @@ function renderJobs() {
   const level = $('#jobLevel').value;
   const rows = funding ? jobData.funding : jobData.openings.filter(r => (!level || r.level === level) && (!$('#jobStartup').value || r.startup));
   $('#jobLevelLabel').hidden = $('#jobStartupLabel').hidden = funding;
-  $('#jobsHeading').textContent = funding ? 'Funding announcements' : 'Engineering openings';
   $('#jobsCount').textContent = rows.length + (rows.length === 1 ? ' result' : ' results');
+  const expanded = new Set($$('#jobsList details[open]').map(el => el.dataset.id));
   $('#jobsList').innerHTML = rows.slice(0, jobLimit).map(r => {
-    const metadata = [r.company, r.startup, r.role, r.level, r.experience, r.location].filter(Boolean).map(esc).join(' · ');
-    return `<article class="panel"><div class="small muted">${esc(r.source)} · ${r.published ? `<time datetime="${esc(r.published)}" title="${esc(new Date(r.published).toLocaleString())}">${r.approximate ? 'about ' : ''}${ago(r.published)}</time>` : 'Posting time unknown'}</div>
-      <h3><a class="link" href="${esc(safeUrl(r.url))}" target="_blank" rel="noopener noreferrer">${esc(r.title)} ↗</a></h3>
+    const metadata = [r.company, r.startup, r.experience || r.level, r.location].filter(Boolean).map(esc).join(' · ');
+    const time = r.published ? `<time datetime="${esc(r.published)}" title="${esc(new Date(r.published).toLocaleString())}">${r.approximate ? 'about ' : ''}${ago(r.published)}</time>` : 'Posting time unknown';
+    return `<article class="panel"><div class="job-head muted small"><span>${esc(r.source)}</span>${time}</div>
+      <h2><a class="link" href="${esc(safeUrl(r.url))}" target="_blank" rel="noopener noreferrer">${esc(r.title)} ↗</a></h2>
       ${metadata ? '<div class="small">' + metadata + '</div>' : ''}
-      ${r.summary ? '<p class="muted">' + esc(r.summary) + '</p>' : ''}
-      ${r.companyId ? '<div><a class="link" href="#jobs/' + Number(r.companyId) + '">Company &amp; outreach →</a></div>' : ''}
+      ${r.summary && r.summary !== r.title ? `<details data-id="${Number(r.id)}" ${expanded.has(String(r.id)) ? 'open' : ''}><summary>Excerpt</summary><p>` + esc(r.summary) + '</p></details>' : ''}
+      ${r.companyId ? '<div><a class="link small" href="#jobs/' + Number(r.companyId) + '">Company &amp; outreach →</a></div>' : ''}
     </article>`;
-  }).join('') || '<div class="panel">No matching publications in this window. Try a longer window or check <a href="#sources">source activity</a>.</div>';
+  }).join('') || `<div class="panel">No matching ${funding ? 'funding announcements' : 'openings'}. Change the filters or <a href="#sources">check sources</a>.</div>`;
   $('#jobsMore').hidden = rows.length <= jobLimit;
 }
 $('#jobHours').onchange = () => {
@@ -116,22 +123,10 @@ async function loadStats() {
     const s = await api('/stats');
     state.stats = s;
     state.threshold = s.threshold;
-    const llm = s.llm.provider === 'none' ? 'Heuristic rules' : `${s.llm.label || s.llm.provider} · ${s.llm.calls}/${s.llm.cap} calls`;
     const busy = s.running.length || s.queue > 0;
     $('#engine').className = `engine ${busy ? 'busy' : ''}`;
-    $('#engineText').textContent = `${busy ? `Working · ${s.running.length} fetching · ${s.queue} queued` : 'Live'} · ${llm}`;
+    $('#engineText').textContent = busy ? 'Scanning' : 'Idle';
     $('#scanBtn').classList.toggle('scanning', s.running.length > 0);
-
-    if ($('#quotaText')) {
-      const sent = s.dailySent ?? 0;
-      const quota = s.dailyQuota ?? 20;
-      $('#quotaText').textContent = `${sent} / ${quota} Sent Today`;
-      const pill = $('#quotaPill');
-      if (pill) {
-        pill.title = `${sent} of ${quota} emails sent today. Target: ${quota}/day.`;
-        pill.style.borderColor = sent >= quota ? 'var(--c-good)' : 'var(--c-brand)';
-      }
-    }
 
     if (state.view === 'brief') renderKpis(s);
     if (state.view === 'live') renderFunnel(s);
@@ -145,22 +140,18 @@ function renderKpis(s) {
   const kpisEl = $('#kpis');
   if (!kpisEl) return;
   kpisEl.innerHTML = [
-    ['Daily Outbound', `${s.dailySent ?? 0} / ${s.dailyQuota ?? 20}`, 'emails sent today'],
-    ['High Match', s.highIntent, `score ${s.threshold}+`],
-    ['Pre-Seed / Seed', s.fundingSignals, 'fresh capital, founders hiring'],
-    ['New Startups', s.newToday, 'discovered today'],
-    ['Hiring Signals', s.events24h, `${s.items24h} signals in 24h`],
-  ].map(([l, v, sub]) => `<div class="kpi"><div class="label">${l}</div><div class="value">${typeof v === 'number' ? v.toLocaleString('en-IN') : esc(v)}</div><div class="sub">${sub}</div></div>`).join('');
+    ['Emails sent today', `${s.dailySent ?? 0} / ${s.dailyQuota ?? 20}`],
+    ['High match', s.highIntent],
+    ['Startups found today', s.newToday],
+  ].map(([label, value]) => `<div class="kpi"><div class="label">${label}</div><div class="value">${esc(value)}</div></div>`).join('');
 
-  const max = Math.max(1, ...(s.sectors || []).map((x) => x.n));
-  $('#sectorBars').innerHTML = (s.sectors || []).slice(0, 9).map((x) => `<div class="bar-row"><span class="trunc">${esc(x.sector)}</span><div class="bar"><i style="width:${(x.n / max) * 100}%"></i></div><span class="muted">${x.n} · ${x.avg ?? 0}</span></div>`).join('') || '<div class="muted small">No startups yet</div>';
 }
 
 // ---------- lead card ----------
 function leadCard(l) {
   const f = l.funding;
   const fundTxt = f ? [f.type === 'directory' ? 'YC-backed' : f.stage, f.amount, f.type === 'directory' ? null : fmtDate(f.date)].filter(Boolean).join(' · ') : null;
-  const where = [l.city, l.markets?.filter((m) => m !== 'Global').slice(0, 2).join(', ')].filter(Boolean).join(' · ');
+  const companyDetails = [fundTxt, l.city, l.team?.label].filter(Boolean).join(' · ');
   const stack = (l.techStack || []).slice(0, 4).map((t) => `<span class="tag tech">${esc(t)}</span>`).join('');
   const appBadge = l.applicationStatus && l.applicationStatus !== 'new'
     ? `<span class="status-badge ${esc(l.applicationStatus)}">${esc(l.applicationStatus === 'sent' ? 'Sent' : l.applicationStatus)}</span>`
@@ -176,8 +167,8 @@ function leadCard(l) {
         ${l.explore ? '<span class="badge explore" title="Exploration pick">explore</span>' : ''}
         <span class="score ${scoreClass(l.score)}" title="${esc((l.breakdown || []).filter((b) => b.points).map((b) => `${b.label}: ${b.points > 0 ? '+' : ''}${b.points}`).join('\n'))}">${l.score}</span>
       </div>
-      <div class="meta">${esc(fundTxt || 'Seed / Early Stage')}${where ? ` · ${esc(where)}` : ''}${l.team ? ` · team ~${esc(l.team.label)}` : ''}</div>
-      ${l.contact ? `<div class="reach">Founder / CTO: <b>${esc(l.contact.name)}</b>${l.contact.role ? ` (${esc(l.contact.role)})` : ''}${l.contact.hasEmail ? ' · <span style="color:var(--c-good)">✉ verified work email</span>' : ''}</div>` : l.target ? `<div class="reach muted">Target: ${esc(l.target.roles.slice(0, 2).join(' or '))}</div>` : ''}
+      ${companyDetails ? '<div class="meta">' + esc(companyDetails) + '</div>' : ''}
+      ${l.contact ? `<div class="reach">Founder / CTO: <b>${esc(l.contact.name)}</b>${l.contact.role ? ` (${esc(l.contact.role)})` : ''}${l.contact.hasEmail ? ' · <span style="color:var(--green)">Email available</span>' : ''}</div>` : l.target ? `<div class="reach muted">Target: ${esc(l.target.roles.slice(0, 2).join(' or '))}</div>` : ''}
       <div class="reason">${esc(l.why || '')}</div>
       <div class="tags">${(l.signals || []).slice(0, 4).map((s) => `<span class="tag">${esc(s)}</span>`).join('')}${stack}</div>
     </div></div>
@@ -198,19 +189,12 @@ function bindLeadClicks(root) {
 // ---------- brief ----------
 async function loadBrief() {
   $('#briefLeads').innerHTML = '<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>';
-  const [b] = await Promise.all([api('/brief'), loadStats(), loadMiniFeed()]);
+  const [b] = await Promise.all([api('/brief'), loadStats()]);
   state.pendingLeads = 0;
-  const first = b.checkpoint.startsWith('1970');
-  $('#briefEyebrow').textContent = first ? 'Daily Target: 20 Emails' : `Since ${new Date(b.checkpoint).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`;
-  $('#briefTitle').textContent = b.totalNew + b.totalUpdated ? `${b.totalNew} New High-Signal Opportunities` : "You're All Caught Up";
-  $('#briefCount').textContent = b.leads.length ? `Showing ${b.leads.length} curated targets with verified founder contacts` : '';
-  $('#briefLeads').innerHTML = b.leads.length ? b.leads.map(leadCard).join('') : `<div class="empty"><strong>Nothing new since your last check.</strong>The discovery engine scans funding announcements and developer hiring channels 24/7. New targets will appear here automatically.</div>`;
+  $('#briefCount').textContent = b.leads.length ? String(b.leads.length) : '';
+  $('#briefLeads').innerHTML = b.leads.length ? b.leads.map(leadCard).join('') : '<div class="empty">No new startups to review.</div>';
   bindLeadClicks($('#briefLeads'));
-  $('#briefIntel').innerHTML = (b.redditHot ? `<div class="it"><a href="#reddit">${b.redditHot} fresh Reddit hiring post${b.redditHot > 1 ? 's' : ''}</a><p>Startups seeking engineers directly on developer subreddits.</p></div>` : '')
-    + (b.intel && b.intel.length ? b.intel.slice(0, 6).map(intelMini).join('') : '<div class="muted small">No new Reddit hiring posts since last check.</div>');
 }
-
-const intelMini = (i) => `<div class="it"><span class="cat ${i.category || 'voice'}">${esc(i.category || 'Hiring')}</span>${i.importance >= 3 ? ' <span class="badge-act">Act now</span>' : ''}<div><a href="${esc(safeUrl(i.url))}" target="_blank" rel="noopener">${esc(i.title)}</a></div>${i.so_what ? `<p>${esc(i.so_what)}</p>` : ''}</div>`;
 
 $('#ackBrief').onclick = async () => {
   await api('/brief/ack', { method: 'POST' });
@@ -309,28 +293,27 @@ function renderDrawer(l) {
     <!-- 5-Line Cold Email Cockpit -->
     <div class="panel outreach-card">
       <div class="panel-head">
-        <h3>5-Line Cold Outreach Cockpit</h3>
-        <span class="muted small">${l.applicationStatus === 'sent' ? `Sent ${fmtDate(l.sentAt)}` : 'Target: < 5 lines, direct to founder'}</span>
+        <h3>Email draft</h3>
+        <span class="muted small">${l.applicationStatus === 'sent' ? `Sent ${fmtDate(l.sentAt)}` : ''}</span>
       </div>
       <div class="outreach-fields">
         <div style="display:flex;gap:10px;margin-bottom:8px;align-items:center;">
           <span class="muted small" style="min-width:55px;">Recipient:</span>
           <b>${esc(l.contact?.name || 'Founder/CTO')}</b>
-          ${primaryEmail ? `<a href="mailto:${esc(primaryEmail)}" class="link small">${esc(primaryEmail)}</a>` : '<span class="muted small">No verified email yet (use Decision Makers below)</span>'}
+          ${primaryEmail ? `<a href="mailto:${esc(primaryEmail)}" class="link small">${esc(primaryEmail)}</a>` : '<span class="muted small">Email unavailable</span>'}
         </div>
         <div style="margin-bottom:8px;">
           <label class="muted small" style="display:block;margin-bottom:4px;">Subject</label>
           <input class="input" id="dOutreachSubject" value="${esc(draftSubject)}" style="width:100%;font-weight:500;">
         </div>
         <div style="margin-bottom:12px;">
-          <label class="muted small" style="display:block;margin-bottom:4px;">Cold Email Draft (Personalized & Under 5 Lines)</label>
+          <label class="muted small" style="display:block;margin-bottom:4px;">Message</label>
           <textarea class="outreach-textarea" id="dOutreachBody" spellcheck="false">${esc(draftBody)}</textarea>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-          <button class="btn primary gmail" id="dSendGmail">✉ Open in Gmail</button>
+          <button class="btn primary gmail" id="dSendGmail">Open in Gmail</button>
           <button class="btn" id="dCopyEmail">Copy Draft</button>
-          <button class="btn mark-sent" id="dMarkSent">${l.applicationStatus === 'sent' ? '✓ Sent Today' : '✓ Mark as Sent'}</button>
-          ${primaryEmail ? '' : '<span class="muted small">Tip: Look up verified email below first</span>'}
+          <button class="btn mark-sent" id="dMarkSent">${l.applicationStatus === 'sent' ? 'Sent' : 'Mark as sent'}</button>
         </div>
       </div>
     </div>
@@ -340,18 +323,18 @@ function renderDrawer(l) {
 
     ${peoplePanel(l)}
 
-    <div class="panel"><div class="panel-head"><h3>Score breakdown</h3><span class="muted small">weights editable in Config</span></div>
+    <div class="panel"><div class="panel-head"><h3>Score breakdown</h3></div>
       ${pos.map((b) => `<div class="bd-row"><span>${esc(b.label)}</span><div class="bar"><i style="width:${b.max ? (b.points / b.max) * 100 : 0}%"></i></div><span class="muted">${b.points}/${b.max}</span><small>${esc(b.detail)}</small></div>`).join('')}
       ${neg.map((b) => `<div class="bd-row neg"><span>${esc(b.label)}</span><div class="bar"><i style="width:100%"></i></div><span class="muted">${b.points}</span><small>${esc(b.detail)}</small></div>`).join('')}
     </div>
 
     <div class="panel"><div class="panel-head"><h3>Startup facts</h3>${l.enrichedAt ? `<span class="muted small">site checked ${ago(l.enrichedAt)}</span>` : ''}</div>
       <div class="facts">
-        <div><span>Funding</span>${esc(l.funding ? [l.funding.stage, l.funding.amount, fmtDate(l.funding.date)].filter(Boolean).join(' · ') : 'Early Stage')}</div>
+        <div><span>Funding</span>${esc(l.funding ? [l.funding.stage, l.funding.amount, fmtDate(l.funding.date)].filter(Boolean).join(' · ') : 'Unknown')}</div>
         <div><span>Investors</span>${esc(l.funding?.investors?.join(', ') || '-')}</div>
-        <div><span>Team Size</span>${esc(l.team ? `~${l.team.label} people` : 'Small team (<=50)')}</div>
+        <div><span>Team Size</span>${esc(l.team ? `~${l.team.label} people` : 'Unknown')}</div>
         <div><span>Tech Stack</span>${esc((l.techStack || []).join(', ') || 'Not detected on homepage')}</div>
-        <div><span>ATS / Job Board</span>${esc(e?.careersAts || 'Direct outreach')}</div>
+        <div><span>ATS / Job Board</span>${esc(e?.careersAts || 'Unknown')}</div>
         ${e?.emails?.length ? `<div><span>Contact inboxes</span>${esc(e.emails.join(', '))}</div>` : ''}
         <div><span>Description</span>${esc(l.description || '-')}</div>
       </div></div>
@@ -386,7 +369,7 @@ function renderDrawer(l) {
       const subject = $('#dOutreachSubject').value;
       const body = $('#dOutreachBody').value;
       await api(`/leads/${l.id}/mark-sent`, { method: 'POST', body: { subject, body } });
-      toast('Logged in Daily 20 outbound! Application status set to Sent.');
+      toast('Marked as sent.');
       loadStats();
       const fresh = await api(`/leads/${l.id}`);
       renderDrawer(fresh);
@@ -457,7 +440,7 @@ function peoplePanel(l) {
   };
   const roleLinks = (l.target?.roles || ['Founding Engineer', 'CTO', 'Founder']).slice(0, 3).map((r) => `<a class="chip-link" href="${esc(liSearch(`${r} ${l.name}`))}" target="_blank" rel="noopener">${esc(r)} at ${esc(l.name)} ↗</a>`).join('');
   return `<div class="panel"><div class="panel-head"><h3>Decision Makers (Founders & Tech Leaders)</h3><span class="muted small">${teamTxt}</span></div>
-    <div class="target"><b>Outbound Target:</b> ${esc((l.target?.roles || []).join(' → '))}<div class="muted small">${esc(l.target?.reason || 'Early stage founders make instant hiring decisions.')}</div></div>
+    <div class="target"><b>Outbound Target:</b> ${esc((l.target?.roles || []).join(' → '))}<div class="muted small">${esc(l.target?.reason || '')}</div></div>
     ${people.length ? people.map(person).join('') : `<div class="muted small" style="margin:10px 0">No named founders yet. Click "Research site" or add a founder below.</div>`}
     <div class="role-links"><span class="muted small">Quick LinkedIn search:</span> ${roleLinks}</div>
     ${l.inboxes?.length ? `<div class="small" style="margin-top:8px"><span class="muted">Company inboxes:</span> ${l.inboxes.map((e) => `<a href="mailto:${esc(e)}">${esc(e)}</a>`).join(', ')}</div>` : ''}
@@ -559,14 +542,14 @@ function selectThread(id) {
 function renderThread() {
   const i = rd.items.find((x) => x.id === rd.sel);
   $('#rdBox').classList.toggle('detail-open', !!i);
-  if (!i) { $('#rdDetail').innerHTML = '<div class="ib-placeholder">Select a hiring thread to see the direct pitch angle.</div>'; return; }
+  if (!i) { $('#rdDetail').innerHTML = '<div class="ib-placeholder">Select a post.</div>'; return; }
   const m = i.meta || {}, b = i.band || {};
   const status = rdStatusOf(i);
   $('#rdDetail').innerHTML = `
     <button class="dt-back" data-act="back" aria-label="Back to list">← Posts</button>
     <div class="dt-head">
       <span class="sc lg ${b.id}">${i.score ?? 0}</span>
-      <div><div class="dt-band">${esc(b.label || '')}${status !== 'open' ? ` <span class="pill">${esc(RD_STATUS.find(([k]) => k === status)?.[1] || status)}</span>` : ''}</div><div class="muted small">${esc(b.action || 'Direct outreach')}</div></div>
+      <div><div class="dt-band">${esc(b.label || '')}${status !== 'open' ? ` <span class="pill">${esc(RD_STATUS.find(([k]) => k === status)?.[1] || status)}</span>` : ''}</div></div>
     </div>
     <h2 class="dt-title"><a href="${esc(safeUrl(i.url))}" target="_blank" rel="noopener">${esc(i.title)}</a></h2>
     <div class="dt-meta">${m.sub ? `r/${esc(m.sub)} · ` : ''}posted ${ago(whenOf(i))}</div>
@@ -628,12 +611,7 @@ async function loadRedditInsights() {
 }
 
 // ---------- live stream ----------
-const feedRow = (a, mini) => `<div class="fe"><time>${new Date(a.ts).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', ...(mini ? {} : { second: '2-digit' }) })}</time><span class="t t-${esc(a.type)}">${esc(a.type)}</span><span>${esc(a.msg)}</span></div>`;
-
-async function loadMiniFeed() {
-  const a = await api('/activity?n=25');
-  $('#miniFeed').innerHTML = a.map((x) => feedRow(x, true)).join('');
-}
+const feedRow = (a) => `<div class="fe"><time>${new Date(a.ts).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</time><span class="t t-${esc(a.type)}">${esc(a.type)}</span><span>${esc(a.msg)}</span></div>`;
 
 async function loadLive() {
   const [a, runs] = await Promise.all([api('/activity?n=200'), api('/runs'), loadStats()]);
@@ -652,7 +630,7 @@ function renderFunnel(s) {
 
   const u = s.llm;
   $('#llmPanel').innerHTML = [
-    ['Provider', u.provider === 'none' ? 'Rules engine (fast & zero cost)' : `${u.label || u.provider} · ${u.model}`],
+    ['Provider', u.provider === 'none' ? 'Rules' : `${u.label || u.provider} · ${u.model}`],
     ['Calls today', `${u.calls} / ${u.cap}`],
     ['Tokens today', `${(u.tokens_in || 0).toLocaleString()} in · ${(u.tokens_out || 0).toLocaleString()} out`],
     ['Extraction mix', `${s.pipeline.via.llm || 0} LLM · ${s.pipeline.via.rules || 0} rules · ${s.pipeline.via.structured || 0} structured`],
@@ -669,7 +647,7 @@ $('#agentBtn').onclick = async (e) => {
 // ---------- sources ----------
 async function loadSources() {
   const rows = await api('/sources');
-  const head = '<div class="tr th"><div>Source</div><div>Type</div><div>Category</div><div>Last run</div><div>Every</div><div>Items</div><div>Passed</div><div>Leads</div><div>Quality</div><div></div></div>';
+  const head = '<div class="tr th"><div>Source</div><div>Last scan</div><div>Interval</div><div>Items</div><div></div></div>';
   const groups = [['system', 'Core hiring & funding sources'], ['user', 'Added by you'], ['agent', 'Agent-discovered queries']];
   let html = head;
   for (const [g, label] of groups) {
@@ -681,11 +659,9 @@ async function loadSources() {
       const detail = s.params.query || s.params.url || (s.params.sub ? `r/${s.params.sub}` : '') || s.params.search || '';
       return `<div class="tr" style="${s.enabled ? '' : 'opacity:.5'}">
         <div style="min-width:0"><b class="trunc" style="display:block">${s.kind === 'reader' ? `<a class="link" href="${esc(safeUrl(s.params.url))}" target="_blank" rel="noopener noreferrer">${esc(s.name)} ↗</a>` : esc(s.name)}</b><small class="muted trunc" style="display:block" title="${esc(s.last_error || detail)}">${esc(s.last_error ? `⚠ ${s.last_error}` : detail)}${s.created_by === 'agent' && s.expires_at ? ` · expires ${fmtDate(s.expires_at)}` : ''}${s.params.why ? ` · ${esc(s.params.why)}` : ''}</small></div>
-        <div class="small">${esc(s.kind)}</div><div class="small">${esc(s.category)}</div>
         <div class="small status-${st}">${st === 'running' ? 'fetching…' : !s.enabled ? 'off' : st === 'deferred' ? 'rate limited' : s.last_run_at ? `${st === 'error' ? 'error · ' : st === 'deferred' ? 'rate limited · ' : ''}${ago(s.last_run_at)}` : 'queued'}</div>
         <div class="small muted">${s.cadence_min >= 60 ? `${Math.round(s.cadence_min / 6) / 10}h` : `${s.cadence_min}m`}</div>
-        <div class="small">${s.items_total}</div><div class="small">${s.passed_total}</div><div class="small"><b>${s.leads_total}</b></div>
-        <div class="small muted">${s.quality == null ? '-' : `${s.quality}%`}</div>
+        <div class="small">${s.items_total}</div>
         <div style="display:flex;gap:6px;justify-content:flex-end;align-items:center">
           <button class="btn small" data-run="${esc(s.id)}" ${s.enabled ? '' : 'disabled'}>Run</button>
           ${s.created_by !== 'system' ? `<button class="btn small danger" data-del="${esc(s.id)}" title="Delete">✕</button>` : ''}
@@ -748,7 +724,6 @@ async function loadConfig() {
 
   if (cand) {
     if ($('#candName')) $('#candName').value = cand.name || '';
-    if ($('#candDailyTarget')) $('#candDailyTarget').value = cand.dailyTarget || 20;
     if ($('#candRoles')) $('#candRoles').value = (cand.targetRoles || []).join(', ');
     if ($('#candSkills')) $('#candSkills').value = (cand.skills || []).join(', ');
     if ($('#candPortfolio')) $('#candPortfolio').value = cand.portfolioUrl || '';
@@ -778,7 +753,7 @@ function renderConfigForm(c, learned = {}) {
       <div class="cfg-field"><label>Preferred Funding Stages</label>${list('preferredStages', c.preferredStages || [])}</div>
       <div class="cfg-field"><label>Enterprise Watch List (Deprioritized)</label>${list('enterpriseNames', c.enterpriseNames || [])}</div>
       <div class="cfg-field"><label>Blocklist (Staffing agencies, job boards, aggregators)</label>${list('blocklist', c.blocklist || [])}</div></div>
-    <div class="panel"><div class="panel-head"><h3>Daily 20 & Email Lookups</h3></div>
+    <div class="panel"><div class="panel-head"><h3>Outreach settings</h3></div>
       <div class="cfg-row"><span>Daily outbound quota</span>${range('dailyQuota', c.dailyQuota || 20, 5, 50)}</div>
       <div class="cfg-row"><span>Small team max headcount (founder direct hiring)</span>${range('contacts.smallTeamMax', c.contacts?.smallTeamMax || 50, 5, 200, 5)}</div>
       <div class="cfg-field"><label>Email lookup provider (API key required on server)</label><select class="input" data-path="contacts.emailProvider">${['auto', 'apollo', 'hunter', 'sprouts'].map((v) => `<option value="${v}" ${c.contacts?.emailProvider === v ? 'selected' : ''}>${v === 'auto' ? 'Auto (whichever API key is configured)' : v[0].toUpperCase() + v.slice(1)}</option>`).join('')}</select></div>
@@ -821,7 +796,6 @@ if (saveCandBtn) {
   saveCandBtn.onclick = async () => {
     const body = {
       name: $('#candName').value.trim(),
-      dailyTarget: Number($('#candDailyTarget').value) || 20,
       targetRoles: $('#candRoles').value.split(',').map((s) => s.trim()).filter(Boolean),
       skills: $('#candSkills').value.split(',').map((s) => s.trim()).filter(Boolean),
       portfolioUrl: $('#candPortfolio').value.trim(),
@@ -832,7 +806,7 @@ if (saveCandBtn) {
     };
     try {
       await api('/candidate', { method: 'PUT', body });
-      toast('Candidate profile updated! New cold emails will use these details.');
+      toast('Profile saved.');
       loadStats();
     } catch (err) {
       toast(err.message);
@@ -844,7 +818,7 @@ if (saveCandBtn) {
 $('#scanBtn').onclick = async () => {
   $('#scanBtn').classList.add('scanning');
   await api('/scan', { method: 'POST' });
-  toast('Scanning all funding news and developer hiring feeds now.');
+  toast('Scan requested.');
   setTimeout(loadStats, 1500);
 };
 
@@ -854,7 +828,6 @@ function connectStream() {
   es.addEventListener('activity', (e) => {
     const a = JSON.parse(e.data);
     if (state.view === 'live') { $('#liveFeed').insertAdjacentHTML('afterbegin', feedRow(a)); const f = $('#liveFeed'); while (f.children.length > 300) f.lastChild.remove(); }
-    if (state.view === 'brief') { $('#miniFeed').insertAdjacentHTML('afterbegin', feedRow(a, true)); const f = $('#miniFeed'); while (f.children.length > 25) f.lastChild.remove(); }
   });
   es.addEventListener('lead', (e) => {
     const l = JSON.parse(e.data);
