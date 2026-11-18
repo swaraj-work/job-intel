@@ -1,12 +1,15 @@
 # JobIntel · Automated Founder Outreach & Job Discovery Engine
 
-> **The 2026 Startup Job-Hunting Playbook as Code**
-> 
-> Inspired by the viral strategy: *"Stop applying to job boards where 1,000+ applicants sit in HR queues. Instead, track fresh Seed rounds and early 'we're hiring' posts (< 24h old, < 100 likes). Find the founder/CTO's direct work email, send a punchy < 5-line cold email, and hit 20 emails a day."*
+The default **Latest jobs** inbox tracks AI, backend, full-stack, SDE I and software internships for early-career candidates in India. Choose the past hour, 24 hours or seven days. The inbox uses publication time, marks relative timestamps as approximate and groups undated items found this week separately. Use the experience and startup filters to narrow results. Open a post to apply or reply, or open **Company & outreach** when a pipeline record is available.
 
-JobIntel transforms this strategy into a 24/7 autonomous outbound engine. It continuously tracks Seed, Pre-Seed, and Series A funding rounds across tech publications, Google News, Y Combinator, and developer subreddits. It pinpoints early-stage startups ($\le 50$ people) where founders make hiring decisions directly, discovers verified founder/CTO work emails, matches their tech stack to your candidate profile, crafts human-sounding < 5-line cold email drafts, and manages your daily 20-email outbound pipeline.
+**Funding signals** surfaces fundraising articles for outreach before a role is advertised. The Daily 20 and Pipeline views track companies, contacts, drafts and follow-ups.
 
----
+### Discovery sources
+
+- Scheduled public sources include YC India job listings, employer comments in Hacker News’ monthly hiring thread, r/bangalorejob, developer subreddits, Indian funding news, and the careers boards of Sarvam, Meraki Labs, Certa and Composio. Add an Ashby board by its slug or add an RSS/Atom feed under **Sources**.
+- LinkedIn Jobs, Indeed India and Naukri have public search pages configured through Jina Reader. Coverage depends on the publisher returning public listing links. The source panel shows fetch errors, including verification pages. Custom Reader sources accept a public careers page URL. Reader can parse job links and nearby timestamps from Markdown. [Jina Reader](https://jina.ai/reader/)
+- To monitor X, set `X_BEARER_TOKEN` and enable the X source. For additional board coverage, set `SERPAPI_API_KEY` and enable Google Jobs. Indexed results link to the provider’s application page. Both integrations use the connected account’s search quota. [X recent search](https://docs.x.com/x-api/posts/search/quickstart/recent-search) · [Google Jobs provider](https://serpapi.com/google-jobs-api)
+- New high-frequency sources generally poll every 10–20 minutes. The inbox refreshes every 30 seconds while visible. Host throttling and third-party indexing can delay discovery.
 
 ## The 20-Emails-A-Day Strategy
 
@@ -32,7 +35,7 @@ get flooded.                 hire directly without HR).     and your core stack.
    - Automatically prioritizes CTO, Technical Co-founder, Founder, and CEO for engineering candidates.
    - Integrates with Apollo and Hunter to fetch verified business emails with deliverability status checks.
 4. **Candidate Profile Engine**:
-   - Configure your target roles (e.g. *Founding Engineer*, *Full Stack Developer*), core tech stack (*React*, *Node.js*, *Python*, *PostgreSQL*), portfolio, GitHub, and one-liner pitch.
+   - Configure your target roles (e.g. *Software Engineering Intern*, *Backend Engineer*), core tech stack (*React*, *Node.js*, *Python*, *PostgreSQL*), portfolio, GitHub, and one-liner pitch.
    - All cold email drafts dynamically weave in your actual portfolio links and relevant experience.
 5. **Tech Stack & ATS Detection**:
    - Inspects startup websites to detect frontend, backend, database, and cloud technologies.
@@ -88,7 +91,7 @@ Every company is evaluated against a 100-point opportunity scoring model:
 | Factor | Weight | What it Evaluates |
 | :--- | :--- | :--- |
 | **Seed / Early Funding** | 30 pts | Recent Pre-Seed, Seed, Angel, or Series A funding (fresh capital deployed for hiring). |
-| **Hiring Signal** | 25 pts | Explicit hiring announcement, "founding engineer" mention, or active developer job posts. |
+| **Hiring Signal** | 25 pts | Explicit hiring announcement, junior engineering opening, or active developer job posts. |
 | **Small Team** | 15 pts | Headcount $\le 50$. Founders make direct hiring decisions without HR friction. |
 | **Tech Stack Match** | 15 pts | Company's tech stack (React, Node, Python, Postgres, etc.) matches candidate's core skills. |
 | **Recency** | 10 pts | Signal discovered within the last 24–48 hours. Speed is everything. |

@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS raw_items (
   meta TEXT,
   note TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_raw_published ON raw_items(published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_raw_status ON raw_items(status, id);
 CREATE INDEX IF NOT EXISTS idx_raw_fetched ON raw_items(fetched_at);
 
@@ -115,6 +116,7 @@ CREATE TABLE IF NOT EXISTS events (
   occurred_at TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+CREATE INDEX IF NOT EXISTS idx_events_raw ON events(raw_item_id);
 CREATE INDEX IF NOT EXISTS idx_events_company ON events(company_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
 

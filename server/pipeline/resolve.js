@@ -77,6 +77,7 @@ export function upsertLead(lead, item, source, rawItemId) {
     .filter((e) => Math.abs(daysAgo(e.occurred_at) - daysAgo(occurred)) < (evType === 'directory' ? 3650 : 30));
   const evTok = tokens(ev.title || item.title);
   const twin = recent.find((e) => {
+    if (item.meta?.job) return e.url === item.url;
     if (evType === 'directory') return true;
     if (evType === 'funding') {
       if (e.stage && ev.stage && e.stage === ev.stage) return true;

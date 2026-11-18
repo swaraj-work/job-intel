@@ -114,17 +114,18 @@ export function heuristicPitch(company, events, contact = null) {
   const h = events.find((e) => e.type === 'hiring');
 
   const founderName = contact?.name ? contact.name.split(/\s+/)[0] : 'there';
-  const roleName = cand.targetRoles?.[0] || 'founding engineer';
+  const roleName = cand.targetRoles?.[0] || 'software engineer';
 
   // 1. Hook
   let hook;
-  if (f) {
+  const latestTrigger = events.find(e => ['funding', 'hiring', 'directory'].includes(e.type));
+  if (latestTrigger?.type === 'hiring') {
+    hook = `I saw your hiring post, “${h.title}”, and wanted to ask about joining ${company.name}.`;
+  } else if (f) {
     const amt = f.amount_usd_m ? fmtUsdM(f.amount_usd_m) : f.amount_text || '';
-    hook = `Saw that ${company.name} just raised a ${f.stage || 'Seed'} round${amt ? ` (${amt})` : ''} — huge congratulations!`;
+    hook = `Saw that ${company.name} just raised a ${f.stage || 'funding'} round${amt ? ` (${amt})` : ''} — huge congratulations!`;
   } else if (dir) {
     hook = `Saw ${company.name} is part of Y Combinator — big congrats on the launch!`;
-  } else if (h) {
-    hook = `Saw that ${company.name} is looking to grow the engineering team — love what you're building.`;
   } else {
     hook = `Came across ${company.name} recently and was really impressed by what your team is building.`;
   }
@@ -132,7 +133,7 @@ export function heuristicPitch(company, events, contact = null) {
   // 2. Value + Proof
   const skillsStr = (cand.skills || ['TypeScript', 'React', 'Node.js']).slice(0, 3).join(', ');
   const links = [cand.portfolioUrl && `Portfolio: ${cand.portfolioUrl}`, cand.githubUrl && `GitHub: ${cand.githubUrl}`].filter(Boolean).join(' | ');
-  const value = `I'm a ${roleName.toLowerCase()} working primarily with ${skillsStr}. I build fast, scalable web apps and love early-stage teams where speed matters.`;
+  const value = `I'm interested in ${latestTrigger?.type === 'hiring' ? 'this opening' : roleName.toLowerCase() + ' opportunities'} and work primarily with ${skillsStr}. I build fast, scalable web apps and love early-stage teams where speed matters.`;
   const proof = links ? `Quick proof of work: ${links}` : '';
 
   // 3. CTA
@@ -151,7 +152,7 @@ export function heuristicPitch(company, events, contact = null) {
     '',
     `Best,\n${cand.name || 'Candidate'}`
   ].filter((x) => x !== null);
-  const subject = f ? `congrats on the ${f.stage || 'Seed'} round / ${roleName.toLowerCase()}` : `engineer interested in ${company.name}`;
+  const subject = latestTrigger?.type === 'hiring' ? `your opening at ${company.name}` : f ? `congrats on the ${f.stage || 'funding'} round / ${roleName.toLowerCase()}` : `engineer interested in ${company.name}`;
 
   return { subject, body: lines.join('\n') };
 }
@@ -183,7 +184,7 @@ STRICT RULES:
 3. Hook: Reference their exact trigger (recent seed round, YC batch, or hiring post).
 4. Value: State the engineer's core stack and how they can build features fast without onboarding friction.
 5. Frictionless CTA: "Open to a quick 10-min chat this week?"
-6. Subject line must be lower-case, natural, and intriguing (e.g. "congrats on the seed round / founding eng" or "saw your seed round - quick question").`;
+6. Subject line must be lower-case, natural, and intriguing (e.g. "junior backend role" or "saw your seed round - quick question").`;
 
   const prompt = `Facts:\n${JSON.stringify(facts, null, 1)}\n\nWrite a 4-5 line human cold email. Return JSON: {"subject": "...", "body": "..."}`;
 

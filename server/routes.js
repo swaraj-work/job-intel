@@ -1,3 +1,5 @@
+import { isEnterpriseName } from './pipeline/extract.js';
+import { matchOpening, fundingSignal } from './pipeline/opportunities.js';
 import express from 'express';
 import { q, J, nowIso, getSetting, setSetting } from './db.js';
 import { getConfig, saveConfig, resetConfig, DEFAULT_CONFIG } from './config.js';
@@ -93,6 +95,36 @@ function eventsFor(ids) {
   for (const r of rows) { if (!m.has(r.company_id)) m.set(r.company_id, []); m.get(r.company_id).push(r); }
   return m;
 }
+
+// Classify raw publications directly so new listings appear even while enrichment is queued.
+api.get('/opportunities', wrap((req, res) => {
+  const undated = req.query.hours === 'undated';
+  const hours = undated ? 168 : Number(req.query.hours || 24);
+  if (![1, 24, 168].includes(hours)) return res.status(400).json({ error: 'Choose 1, 24 or 168 hours' });
+  const now = Date.now();
+  const timeColumn = undated ? 'r.fetched_at' : 'r.published_at';
+  const rows = q.all(`SELECT r.id,r.source_id,r.url,r.title,r.summary,r.meta,r.published_at,s.kind,s.params,s.name source,
+    (SELECT e.company_id FROM events e WHERE e.raw_item_id=r.id LIMIT 1) companyId
+    FROM raw_items r LEFT JOIN sources s ON s.id=r.source_id
+    WHERE ${undated ? 'r.published_at IS NULL AND' : ''} ${timeColumn} > ? AND ${timeColumn} <= ?
+    ORDER BY ${timeColumn} DESC, r.id DESC`,
+    new Date(now - hours * 3600000).toISOString(), new Date(now).toISOString());
+  const openings = [], funding = [];
+  for (const r of rows) {
+    const meta = J(r.meta, {});
+    if (meta.entity || !/^https?:\/\//i.test(r.url)) continue;
+    const params = J(r.params, {});
+    const item = { ...r, meta };
+    const company = meta.job?.company;
+    if (company && (isEnterpriseName(company) || getConfig().blocklist.some(n => n.toLowerCase() === company.toLowerCase()))) continue;
+    const match = matchOpening(item, { id: r.source_id, kind: r.kind, params });
+    const card = { id: r.id, title: r.title, url: r.url, published: r.published_at, approximate: !!meta.job?.approximate,
+      summary: (r.summary || '').slice(0, 320), source: meta.job?.publisher || r.source || 'Original publication', companyId: r.companyId };
+    if (!meta.job && ['rss', 'gnews', 'hn', 'reddit'].includes(r.kind) && fundingSignal(r.title)) funding.push(card);
+    else if (match) openings.push({ ...card, ...match });
+  }
+  res.json({ openings, funding });
+}));
 
 // ---------- stats ----------
 api.get('/stats', wrap((req, res) => {
@@ -485,7 +517,11 @@ function sourceFromBody(b) {
   if (!SOURCE_KINDS.includes(kind)) throw new Error(`kind must be one of ${SOURCE_KINDS.join(', ')}`);
   const category = ['leads', 'intel', 'voice'].includes(b.category) ? b.category : kind === 'reddit' ? 'voice' : 'leads';
   let params, name;
-  if (kind === 'rss') { if (!/^https?:\/\//.test(b.url || '')) throw new Error('A valid feed URL is required'); params = { url: b.url }; name = b.name || new URL(b.url).hostname; }
+  if (kind === 'ashby') {
+    if (!/^[a-z0-9_-]+$/i.test(b.board || '')) throw new Error('Enter an Ashby board name');
+    params = { board: b.board, company: b.name || b.board }; name = params.company;
+  }
+  else if (kind === 'rss' || kind === 'reader') { if (!/^https?:\/\//.test(b.url || '')) throw new Error('A valid feed URL is required'); params = { url: b.url }; name = b.name || new URL(b.url).hostname; }
   else if (kind === 'gnews') { if (!b.query) throw new Error('query is required'); params = { query: b.query }; name = b.name || `GNews: ${b.query}`; }
   else if (kind === 'reddit') { if (!b.sub && !b.search) throw new Error('sub or search is required'); params = { sub: b.sub || undefined, search: b.search || undefined }; name = b.name || (b.sub ? `Reddit r/${b.sub}` : `Reddit: ${b.search}`); }
   else if (kind === 'hn') { if (!b.query) throw new Error('query is required'); params = { query: b.query, days: 45 }; name = b.name || `HN: ${b.query}`; }
@@ -503,9 +539,10 @@ api.post('/sources', wrap(async (req, res) => {
   const s = sourceFromBody(req.body || {});
   if (q.get('SELECT 1 FROM sources WHERE id = ?', s.id)) throw new Error('This source already exists');
   const items = await fetchSource(s); // validates before saving
-  q.run('INSERT INTO sources(id, name, kind, category, params, cadence_min, created_by) VALUES(?,?,?,?,?,?,?)', s.id, s.name, s.kind, s.category, JSON.stringify(s.params), Number(req.body.cadence_min) || 120, 'user');
+  const cadence = Math.max(5, Number(req.body.cadence_min) || (['reader', 'ashby', 'reddit'].includes(s.kind) ? 15 : 120));
+  q.run('INSERT INTO sources(id, name, kind, category, params, cadence_min, created_by) VALUES(?,?,?,?,?,?,?)', s.id, s.name, s.kind, s.category, JSON.stringify(s.params), cadence, 'user');
   const fresh = ingest({ ...s }, items);
-  q.run('UPDATE sources SET last_run_at = ?, next_run_at = ?, last_status = ?, runs = 1, items_total = ? WHERE id = ?', nowIso(), new Date(Date.now() + 120 * 60000).toISOString(), 'ok', fresh, s.id);
+  q.run('UPDATE sources SET last_run_at = ?, next_run_at = ?, last_status = ?, runs = 1, items_total = ? WHERE id = ?', nowIso(), new Date(Date.now() + cadence * 60000).toISOString(), 'ok', fresh, s.id);
   log('source', `Added ${s.name}: ${items.length} items, ${fresh} new`);
   res.json({ ok: true, id: s.id, fetched: items.length, fresh });
 }));

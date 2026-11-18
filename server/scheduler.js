@@ -36,9 +36,13 @@ export function ingest(source, items) {
   for (const it of items) {
     const url = canonicalUrl(it.url);
     const hash = sha1(url);
-    if (q.get('SELECT 1 FROM raw_items WHERE url_hash = ?', hash)) continue;
+    const existing = q.get('SELECT published_at FROM raw_items WHERE url_hash = ?', hash);
+    if (existing) {
+      if (!existing.published_at && it.published_at) q.run('UPDATE raw_items SET published_at=? WHERE url_hash=?', it.published_at, hash);
+      continue;
+    }
     const tooOld = !it.meta?.entity && it.published_at && daysAgo(it.published_at) > cfg.maxItemAgeDays;
-    const status = tooOld ? 'filtered' : !it.meta?.entity && isNearDup(it.title) ? 'dup' : 'new';
+    const status = tooOld ? 'filtered' : !it.meta?.entity && !it.meta?.job && !it.meta?.hiringThread && !['reddit', 'xjobs'].includes(source.kind) && isNearDup(it.title) ? 'dup' : 'new';
     const r = q.run(ins, source.id, url, hash, it.title.slice(0, 500), it.summary || '', it.published_at || null, status, JSON.stringify(it.meta || {}));
     if (r.changes) fresh += status === 'new' ? 1 : 0;
   }
@@ -90,7 +94,9 @@ function hostOf(s) {
   const p = J(s.params, {});
   if (s.kind === 'gnews') return 'news.google.com';
   if (s.kind === 'reddit') return 'reddit';
-  if (s.kind === 'hn') return 'hn.algolia.com';
+  if (s.kind === 'reader') return 'r.jina.ai';
+  if (s.kind === 'ashby') return 'api.ashbyhq.com';
+  if (s.kind === 'hn' || s.kind === 'hnhiring') return 'hn.algolia.com';
   if (s.kind === 'yc') return 'yc-oss.github.io';
   try { return new URL(p.url).host; } catch { return s.id; }
 }

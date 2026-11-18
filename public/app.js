@@ -37,13 +37,13 @@ const ago = (iso) => {
 const fmtDate = (iso) => (iso ? new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : '');
 const avatar = (l) => `<div class="avatar">${l.logo ? `<img src="${esc(safeUrl(l.logo))}" alt="" loading="lazy" onerror="this.remove()">` : ''}${l.logo ? '' : esc(initials(l.name))}</div>`;
 
-const state = { view: 'brief', threshold: 60, stats: null, leadsOffset: 0, config: null, pendingLeads: 0 };
+const state = { view: 'jobs', threshold: 60, stats: null, leadsOffset: 0, config: null, pendingLeads: 0 };
 
 // ---------- routing ----------
-const VIEWS = ['brief', 'leads', 'reddit', 'live', 'sources', 'config'];
+const VIEWS = ['jobs', 'brief', 'leads', 'reddit', 'live', 'sources', 'config'];
 function route() {
   const [v, id] = location.hash.slice(1).split('/');
-  const view = VIEWS.includes(v) ? v : 'brief';
+  const view = VIEWS.includes(v) ? v : 'jobs';
   state.view = view;
   for (const x of VIEWS) {
     const el = $(`#view-${x}`);
@@ -51,6 +51,7 @@ function route() {
   }
   $$('#tabs a').forEach((a) => a.classList.toggle('active', a.dataset.view === view));
   const viewLoaders = {
+    jobs: loadJobs,
     brief: loadBrief,
     leads: () => loadLeads(true),
     reddit: loadReddit,
@@ -62,6 +63,52 @@ function route() {
   if (id) openLead(id);
 }
 window.addEventListener('hashchange', route);
+
+let jobData = { openings: [], funding: [] };
+let jobLimit = 50;
+let jobRequest = 0;
+
+async function loadJobs() {
+  const request = ++jobRequest;
+  try {
+    const data = await api('/opportunities?hours=' + $('#jobHours').value);
+    if (request !== jobRequest) return;
+    jobData = data;
+    renderJobs();
+  } catch (e) {
+    if (request === jobRequest) $('#jobsCount').textContent = 'Refresh failed · ' + e.message;
+  }
+}
+
+function renderJobs() {
+  const funding = $('#jobType').value === 'funding';
+  const level = $('#jobLevel').value;
+  const rows = funding ? jobData.funding : jobData.openings.filter(r => (!level || r.level === level) && (!$('#jobStartup').value || r.startup));
+  $('#jobLevelLabel').hidden = $('#jobStartupLabel').hidden = funding;
+  $('#jobsHeading').textContent = funding ? 'Funding announcements' : 'Engineering openings';
+  $('#jobsCount').textContent = rows.length + (rows.length === 1 ? ' result' : ' results');
+  $('#jobsList').innerHTML = rows.slice(0, jobLimit).map(r => {
+    const metadata = [r.company, r.startup, r.role, r.level, r.experience, r.location].filter(Boolean).map(esc).join(' · ');
+    return `<article class="panel"><div class="small muted">${esc(r.source)} · ${r.published ? `<time datetime="${esc(r.published)}" title="${esc(new Date(r.published).toLocaleString())}">${r.approximate ? 'about ' : ''}${ago(r.published)}</time>` : 'Posting time unknown'}</div>
+      <h3><a class="link" href="${esc(safeUrl(r.url))}" target="_blank" rel="noopener noreferrer">${esc(r.title)} ↗</a></h3>
+      ${metadata ? '<div class="small">' + metadata + '</div>' : ''}
+      ${r.summary ? '<p class="muted">' + esc(r.summary) + '</p>' : ''}
+      ${r.companyId ? '<div><a class="link" href="#jobs/' + Number(r.companyId) + '">Company &amp; outreach →</a></div>' : ''}
+    </article>`;
+  }).join('') || '<div class="panel">No matching publications in this window. Try a longer window or check <a href="#sources">source activity</a>.</div>';
+  $('#jobsMore').hidden = rows.length <= jobLimit;
+}
+$('#jobHours').onchange = () => {
+  jobLimit = 50;
+  jobData = { openings: [], funding: [] };
+  $('#jobsList').textContent = '';
+  $('#jobsMore').hidden = true;
+  $('#jobsCount').textContent = 'Loading…';
+  loadJobs();
+};
+for (const id of ['#jobType', '#jobLevel', '#jobStartup']) $(id).onchange = () => { jobLimit = 50; renderJobs(); };
+$('#jobsMore').onclick = () => { jobLimit += 50; renderJobs(); };
+setInterval(() => { if (state.view === 'jobs' && !document.hidden) loadJobs(); }, 30000);
 
 // ---------- engine status ----------
 async function loadStats() {
@@ -633,9 +680,9 @@ async function loadSources() {
       const st = s.running ? 'running' : s.last_status || 'pending';
       const detail = s.params.query || s.params.url || (s.params.sub ? `r/${s.params.sub}` : '') || s.params.search || '';
       return `<div class="tr" style="${s.enabled ? '' : 'opacity:.5'}">
-        <div style="min-width:0"><b class="trunc" style="display:block">${esc(s.name)}</b><small class="muted trunc" style="display:block" title="${esc(s.last_error || detail)}">${esc(s.last_error ? `⚠ ${s.last_error}` : detail)}${s.created_by === 'agent' && s.expires_at ? ` · expires ${fmtDate(s.expires_at)}` : ''}${s.params.why ? ` · ${esc(s.params.why)}` : ''}</small></div>
+        <div style="min-width:0"><b class="trunc" style="display:block">${s.kind === 'reader' ? `<a class="link" href="${esc(safeUrl(s.params.url))}" target="_blank" rel="noopener noreferrer">${esc(s.name)} ↗</a>` : esc(s.name)}</b><small class="muted trunc" style="display:block" title="${esc(s.last_error || detail)}">${esc(s.last_error ? `⚠ ${s.last_error}` : detail)}${s.created_by === 'agent' && s.expires_at ? ` · expires ${fmtDate(s.expires_at)}` : ''}${s.params.why ? ` · ${esc(s.params.why)}` : ''}</small></div>
         <div class="small">${esc(s.kind)}</div><div class="small">${esc(s.category)}</div>
-        <div class="small status-${st}">${st === 'running' ? 'fetching…' : s.last_run_at ? `${st === 'error' ? 'error · ' : st === 'deferred' ? 'rate limited · ' : ''}${ago(s.last_run_at)}` : 'queued'}</div>
+        <div class="small status-${st}">${st === 'running' ? 'fetching…' : !s.enabled ? 'off' : st === 'deferred' ? 'rate limited' : s.last_run_at ? `${st === 'error' ? 'error · ' : st === 'deferred' ? 'rate limited · ' : ''}${ago(s.last_run_at)}` : 'queued'}</div>
         <div class="small muted">${s.cadence_min >= 60 ? `${Math.round(s.cadence_min / 6) / 10}h` : `${s.cadence_min}m`}</div>
         <div class="small">${s.items_total}</div><div class="small">${s.passed_total}</div><div class="small"><b>${s.leads_total}</b></div>
         <div class="small muted">${s.quality == null ? '-' : `${s.quality}%`}</div>
@@ -652,14 +699,15 @@ async function loadSources() {
   $$('[data-del]').forEach((b) => (b.onclick = async () => { if (!confirm('Delete this source?')) return; await api(`/sources/${b.dataset.del}`, { method: 'DELETE' }); loadSources(); }));
 }
 
-const PLACEHOLDER = { rss: 'https://example.com/feed', gnews: 'Seed startup raised hiring Bangalore', reddit: 'developersIndia or hiring', hn: 'Who is hiring' };
+const PLACEHOLDER = { reader: 'https://company.com/careers', ashby: 'Board name, e.g. sarvam', rss: 'https://example.com/feed', gnews: 'Seed startup raised hiring Bangalore', reddit: 'developersIndia or hiring', hn: 'Who is hiring' };
 $('#srcKind').onchange = (e) => ($('#srcValue').placeholder = PLACEHOLDER[e.target.value]);
 function sourceBody() {
   const f = new FormData($('#addSource'));
   const kind = f.get('kind');
   const v = String(f.get('value') || '').trim();
   const body = { kind, category: f.get('category'), name: f.get('name') || undefined };
-  if (kind === 'rss') body.url = v;
+  if (kind === 'rss' || kind === 'reader') body.url = v;
+  else if (kind === 'ashby') body.board = v;
   else if (kind === 'reddit') { if (v.startsWith('search:')) body.search = v.slice(7).trim(); else body.sub = v.replace(/^\/?r\//, ''); }
   else body.query = v;
   return body;
@@ -688,7 +736,7 @@ const WEIGHT_HELP = {
   hiringSignal: 'Explicit hiring announcements, founding engineer, developer posts',
   smallTeam: 'Small team (<=50 headcount) where founders hire directly without HR',
   techMatch: 'Tech stack match with candidate core skills',
-  recency: 'Discovered within last 24-48 hours',
+  recency: 'Time since the latest dated hiring or funding publication',
   hasEmail: 'Verified founder or decision-maker email found',
   novelty: 'Freshly discovered startup opportunity'
 };

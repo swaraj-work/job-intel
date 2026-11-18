@@ -14,8 +14,8 @@ const SEGMENTS = [
 ];
 const INTENTS = [
   'raises seed funding', 'raises pre-seed', 'raises Series A', 'seed round',
-  'hiring founding engineer', 'hiring full stack', 'hiring software engineer', 'we are hiring engineers',
-  'hiring backend developer', 'looking for founding engineer'
+  'hiring software engineering interns', 'hiring junior full stack', 'SDE 1 hiring', 'new grad AI engineer',
+  'hiring junior backend developer', 'fresher developer opening'
 ];
 
 function addAgentQuery(query, name, why) {
@@ -38,14 +38,14 @@ function templateQueries(n) {
   const picks = [];
   while (picks.length < n && pool.length) picks.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
   setSetting('agent_used', [...used, ...picks].slice(-300));
-  return picks.map((p) => ({ query: `${p} when:14d`, why: 'rotation' }));
+  return picks.map((p) => ({ query: `${p} when:2d`, why: 'rotation' }));
 }
 
 async function llmQueries(n) {
   const top = q.all(`SELECT name, sector FROM companies WHERE status != 'dismissed' ORDER BY score DESC LIMIT 10`);
   const existing = q.all(`SELECT params FROM sources WHERE kind = 'gnews' AND enabled = 1`).map((r) => J(r.params, {}).query);
   const out = await llm.json(
-    'You plan high-yield news searches to discover early-stage startups that just raised seed/pre-seed capital or posted fresh "we are hiring" developer alerts. Each query runs on Google News RSS. Prefer phrasing like ("seed round" OR "pre-seed" India startup) or ("hiring founding engineer" startup). Avoid generic market fluff.',
+    'You plan high-yield news searches to discover early-stage startups that just raised seed/pre-seed capital or posted fresh "we are hiring" developer alerts. Each query runs on Google News RSS. Prefer phrasing like ("seed round" OR "pre-seed" India startup) or ("hiring software engineering interns" startup). Avoid generic market fluff.',
     `Top scored targets: ${JSON.stringify(top)}\nQueries already running: ${JSON.stringify(existing)}\n\nPropose ${n} NEW queries. Use Google News operators (OR, quotes). Append " when:7d" or " when:3d". Return {"queries":[{"query":"...","why":"<=8 words"}]}`,
     { type: 'OBJECT', properties: { queries: { type: 'ARRAY', items: { type: 'OBJECT', properties: { query: { type: 'STRING' }, why: { type: 'STRING' } }, required: ['query', 'why'] } } }, required: ['queries'] },
     { temperature: 0.8, maxTokens: 800 },
@@ -98,11 +98,10 @@ export async function agentCycle({ force = false } = {}) {
 export function lookalike(companyId) {
   const c = q.get('SELECT * FROM companies WHERE id = ?', companyId);
   if (!c) return null;
-  const markets = J(c.markets, []).filter((m) => m !== 'Global');
   const seg = { SaaS: 'SaaS startup', AI: 'AI startup', D2C: 'D2C brand', Exporter: 'exporter', Edtech: 'edtech startup', Travel: 'travel startup', 'IT Services': 'IT services company', Agency: 'agency', Manufacturing: 'manufacturer', Gaming: 'gaming studio', Marketplace: 'marketplace' }[c.sector] || 'startup';
   const queries = [
-    `Indian ${seg} ${markets.length ? `expands ${markets.slice(0, 2).join(' OR ')}` : 'international expansion'} when:30d`,
-    `Indian ${seg} raises funding global customers when:30d`,
+    `Indian ${seg} ("engineering intern" OR "SDE 1" OR "junior engineer") hiring when:3d`,
+    `Indian ${seg} raises seed funding when:7d`,
   ];
   const ids = queries.map((qq) => addAgentQuery(qq, `Lookalike of ${c.name}: ${qq.replace(/ when:\d+d$/, '')}`, `like ${c.name}`)).filter(Boolean);
   for (const id of ids) runSource(id).catch(() => {});

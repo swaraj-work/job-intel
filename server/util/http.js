@@ -1,5 +1,5 @@
 // Polite HTTP: per-host pacing, cooldown on 429/503, timeouts, size cap.
-const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36 PayGlocalLeadIntel/1.0';
+const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36 JobIntel/1.0';
 
 const HOST_GAP_MS = {
   'www.reddit.com': 70000, // anonymous RSS tolerates roughly one request a minute

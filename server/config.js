@@ -6,18 +6,18 @@ export const DEFAULT_CONFIG = {
   candidate: {
     name: 'Alex Kumar',
     targetRoles: [
-      'Founding Engineer',
+      'AI Engineer',
       'Full Stack Developer',
       'Backend Engineer',
-      'Frontend Developer',
+      'SDE I',
       'Software Engineer',
-      'AI Engineer'
+      'Software Engineering Intern'
     ],
     skills: [
       'JavaScript', 'TypeScript', 'Node.js', 'React', 'Next.js',
       'Python', 'PostgreSQL', 'FastAPI', 'Docker', 'Tailwind', 'REST APIs'
     ],
-    experience: '2-4 years / Mid-level',
+    experience: '0-2 years / Fresher',
     location: 'Bangalore / Remote',
     portfolioUrl: 'https://github.com',
     githubUrl: 'https://github.com',
@@ -94,6 +94,15 @@ export const DEFAULT_CONFIG = {
   maxItemAgeDays: 30,
 };
 
+// Migrate only the previous shipped profile values on an existing volume.
+const stored = getSetting('config', {});
+if (stored.candidate && !getSetting('early_career_profile_v1', false)) {
+  const previousRoles = ['Founding Engineer', 'Full Stack Developer', 'Backend Engineer', 'Frontend Developer', 'Software Engineer', 'AI Engineer'];
+  if (stored.candidate.experience === '2-4 years / Mid-level') stored.candidate.experience = DEFAULT_CONFIG.candidate.experience;
+  if (JSON.stringify(stored.candidate.targetRoles) === JSON.stringify(previousRoles)) stored.candidate.targetRoles = DEFAULT_CONFIG.candidate.targetRoles;
+  setSetting('config', stored);
+  setSetting('early_career_profile_v1', true);
+}
 let cache = null;
 
 export function getConfig() {

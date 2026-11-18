@@ -1,5 +1,5 @@
 // Classifiers for startup funding/hiring market intel and Reddit hiring opportunities.
-import { getConfig } from '../config.js';
+import { matchOpening } from './opportunities.js';
 
 const has = (re, t) => re.test(t);
 const textOf = (item) => `${item.title} ${item.summary || ''}`;
@@ -7,7 +7,7 @@ const textOf = (item) => `${item.title} ${item.summary || ''}`;
 // Topic -> what candidate should do about it
 const TOPICS = [
   { id: 'funding-surge', cat: 'market', imp: 3, re: /\b(seed round|pre-seed|series a|raised|funding surge|venture capital)\b/i,
-    so: 'Fresh capital deployed: early-stage founders will hire founding engineers in the next 14 days.' },
+    so: 'Check the company’s careers page and ask the founders about junior engineering roles.' },
   { id: 'hiring-trends', cat: 'market', imp: 2, re: /\b(tech hiring|developer shortage|ai engineers?|hiring spree|job market)\b/i,
     so: 'Tech hiring trend: tailor your cold outreach hook to this demand.' },
   { id: 'yc-batch', cat: 'market', imp: 3, re: /\b(y combinator|yc w\d{2}|yc s\d{2}|demo day)\b/i,
@@ -41,7 +41,7 @@ export function classifyReddit(item, source) {
 
   // Must be hiring or looking for builders
   const isHiring = R_HIRING.test(title) || R_HIRING.test(t.slice(0, 300));
-  if (!isHiring) return null;
+  if (!isHiring || !matchOpening(item, source)) return null;
 
   // Skip "for hire" / candidate job seeker posts
   if (/^\s*\[(for hire)\]/i.test(title) || /\bi am looking for a job\b/i.test(t)) return null;

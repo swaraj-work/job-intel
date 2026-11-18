@@ -17,6 +17,7 @@
     <span>JobIntel</span><span class="brand-sub">/ Founder Outreach</span>
   </div>
   <nav class="tabs" id="tabs">
+    <a href="#jobs" data-view="jobs">Latest jobs</a>
     <a href="#brief" data-view="brief">Daily 20</a>
     <a href="#leads" data-view="leads">Pipeline</a>
     <a href="#reddit" data-view="reddit">Reddit Hiring</a>
@@ -33,8 +34,21 @@
 </header>
 
 <main class="main">
+  <section class="view" id="view-jobs">
+    <div class="hero"><div><h1>Latest engineering opportunities</h1>
+      <p>AI, backend, full-stack and software roles for early-career engineers, plus startups that recently raised funding.</p></div></div>
+    <div class="job-controls">
+      <label>Posted <select class="input" id="jobHours"><option value="1">Past hour</option><option value="24" selected>Past 24 hours</option><option value="168">Past 7 days</option><option value="undated">Undated · found this week</option></select></label>
+      <label>Show <select class="input" id="jobType"><option value="openings">Hiring posts</option><option value="funding">Funding signals</option></select></label>
+      <label id="jobStartupLabel">Company <select class="input" id="jobStartup"><option value="">All companies</option><option value="startup">Startup signals only</option></select></label>
+      <label id="jobLevelLabel">Experience <select class="input" id="jobLevel"><option value="">All matches</option><option>Internship</option><option>Early career</option><option>Experience unspecified</option></select></label>
+    </div>
+    <div class="section-head"><h2 id="jobsHeading">Hiring posts</h2><span id="jobsCount" class="muted small" role="status"></span></div>
+    <div class="cards" id="jobsList"></div>
+    <button class="btn small" id="jobsMore" hidden>Show more</button>
+  </section>
   <!-- BRIEF (THE DAILY 20) -->
-  <section class="view" id="view-brief">
+  <section class="view" id="view-brief" hidden>
     <div class="hero">
       <div>
         <div class="eyebrow" id="briefEyebrow">Today's Selection</div>
@@ -160,6 +174,8 @@
       <form id="addSource" class="add-grid">
         <select class="input" name="kind" id="srcKind">
           <option value="rss">RSS / Atom feed</option>
+          <option value="reader">Public jobs page via Jina Reader</option>
+          <option value="ashby">Ashby careers board</option>
           <option value="gnews">Google News query</option>
           <option value="reddit">Reddit subreddit</option>
           <option value="hn">Hacker News search</option>
@@ -204,7 +220,7 @@
         </div>
         <div class="field full">
           <label>Target Roles (comma-separated)</label>
-          <input class="input" id="candRoles" placeholder="Founding Engineer, Full Stack Developer, Backend Engineer">
+          <input class="input" id="candRoles" placeholder="AI Engineer, Backend Engineer, SDE I, Software Engineering Intern">
         </div>
         <div class="field full">
           <label>Core Tech Skills (comma-separated)</label>
@@ -224,7 +240,7 @@
         </div>
         <div class="field">
           <label>Experience & Location</label>
-          <input class="input" id="candExp" placeholder="2-4 yrs / Bangalore & Remote">
+          <input class="input" id="candExp" placeholder="0-2 years / Fresher">
         </div>
         <div class="field full">
           <label>One-Liner Value Pitch (Short & Punchy)</label>

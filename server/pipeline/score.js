@@ -48,10 +48,6 @@ export function computeScore(company, events, cfg = getConfig(), learned = getSe
   } else if (hiringKeywords.length) {
     hScore = 0.75;
     hDetail = `Mentioned: ${hiringKeywords.slice(0, 2).join(', ')}`;
-  } else if (fBest > 0.4) {
-    // Startups that just raised capital start hiring immediately
-    hScore = 0.6;
-    hDetail = 'Fresh funding = immediate hiring expansion';
   }
   add('hiringSignal', 'Hiring Signal', hScore, hDetail);
 
@@ -80,9 +76,13 @@ export function computeScore(company, events, cfg = getConfig(), learned = getSe
   add('techMatch', 'Tech Stack Match', techScore, matchedSkills.length ? `Matches: ${matchedSkills.slice(0, 4).join(', ')}` : 'General modern stack');
 
   // 5. Recency: speed is everything (Reddit rule: first 100 applicants win)
-  const firstSeenDays = daysAgo(company.first_seen_at);
-  const recencyScore = firstSeenDays < 2 ? 1.0 : firstSeenDays < 4 ? 0.8 : firstSeenDays < 8 ? 0.5 : 0.2;
-  add('recency', 'Opportunity Freshness', recencyScore, firstSeenDays < 1 ? 'Discovered today (<24h)' : `First seen ${Math.round(firstSeenDays)}d ago`);
+  const datedSignal = q.get(`SELECT r.published_at FROM events e JOIN raw_items r ON r.id=e.raw_item_id
+    WHERE e.company_id=? AND e.type IN ('funding','hiring','directory') AND r.published_at IS NOT NULL AND r.published_at<=?
+    ORDER BY r.published_at DESC LIMIT 1`, company.id, nowIso());
+  const age = daysAgo(datedSignal?.published_at);
+  const recencyScore = age < 1 / 24 ? 1 : age < 1 ? 0.85 : age < 7 ? 0.45 : 0;
+  add('recency', 'Opportunity Freshness', recencyScore, !Number.isFinite(age) ? 'Publication date unknown'
+    : age < 1 / 24 ? 'Published in the past hour' : age < 1 ? 'Published in the past 24 hours' : `Published ${Math.floor(age)}d ago`);
 
   // 6. Has Verified Email: founder or CTO email ready
   const contacts = q.all('SELECT email, role FROM contacts WHERE company_id = ? AND email IS NOT NULL', company.id);
@@ -132,7 +132,7 @@ function explain(company, events, parts, matchedSkills) {
   }
   const tStr = team ? `~${team.exact ? team.min : `${team.min}-${team.max}`} team` : 'early team';
   const matchStr = matchedSkills?.length ? `Stack match: ${matchedSkills.slice(0, 3).join(', ')}` : null;
-  const lead = triggers.length ? `${company.name} ${triggers.join(' and ')} (${tStr}).` : `${company.name} is expanding its engineering team (${tStr}).`;
+  const lead = triggers.length ? `${company.name} ${triggers.join(' and ')} (${tStr}).` : `${company.name} is a potential outreach target (${tStr}).`;
   return matchStr ? `${lead} ${matchStr}.` : lead;
 }
 

@@ -1,6 +1,7 @@
 import { XMLParser } from 'fast-xml-parser';
 import { fetchText, fetchJson } from '../util/http.js';
 import { stripHtml, clip, toIso } from '../util/text.js';
+import { jobSources } from './jobs.js';
 
 const xml = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@', textNodeName: '#text', processEntities: true, htmlEntities: true });
 const arr = (x) => (x == null ? [] : Array.isArray(x) ? x : [x]);
@@ -26,7 +27,7 @@ export function parseFeed(body) {
         url: link?.['@href'] || txt(e.id),
         title: stripHtml(txt(e.title)),
         summary: clip(stripHtml(txt(e.content) || txt(e.summary)), 1500),
-        published_at: toIso(txt(e.updated) || txt(e.published)),
+        published_at: toIso(txt(e.published)),
         meta: { author: txt(e.author?.name) || undefined },
       };
     });
@@ -80,6 +81,7 @@ async function redditOAuth(p) {
 }
 
 const kinds = {
+  ...jobSources,
   async rss(p) {
     const { text } = await fetchText(p.url);
     let items = parseFeed(text);
@@ -169,7 +171,29 @@ export async function fetchSource(source) {
 // Seed catalogue for Seed funding, fresh hiring posts, YC startups, and builder feeds.
 export const RETIRED_SOURCES = ['rd-fira', 'rd-saas-india', 'rbi-press', 'rbi-notifications', 'gn-competitors', 'gn-xb-payments', 'gn-export-policy', 'gn-payglocal'];
 
+const fast = { cadence_min: 10, min_cadence: 5, max_cadence: 20 };
 export const SEED_SOURCES = [
+  { ...fast, id: 'rd-india-early-career', name: 'India startup communities · early-career openings', kind: 'reddit', category: 'voice',
+    params: { sub: 'developersIndia+IndianStartups', assumeIndia: true, search: '(hiring OR opening) AND (intern OR fresher OR junior OR "SDE 1")' } },
+  { ...fast, id: 'gn-india-early-career', name: 'Startup engineering internships & new-grad hiring', kind: 'gnews',
+    params: { query: 'India startup ("engineering intern" OR "SDE 1" OR "junior backend" OR "AI engineer") hiring when:1d', assumeIndia: true } },
+  { ...fast, id: 'rd-bangalorejob', name: 'Reddit r/bangalorejob', kind: 'reddit', category: 'voice', params: { sub: 'bangalorejob', assumeIndia: true } },
+  { ...fast, id: 'yc-jobs-india', name: 'YC startup engineering jobs · India', kind: 'ycjobs', params: {} },
+  { ...fast, id: 'hn-hiring-comments', name: 'HN Who is hiring? · employer posts', kind: 'hnhiring', params: {} },
+  ...[['sarvam', 'Sarvam'], ['Meraki-Labs', 'Meraki Labs'], ['certa', 'Certa'], ['composio', 'Composio']].map(([board, company]) => ({
+    ...fast, id: 'ashby-' + board.toLowerCase(), name: company + ' careers', kind: 'ashby', params: { board, company }
+  })),
+  { id: 'indexed-jobs-india', name: 'Google Jobs · requires SERPAPI_API_KEY', kind: 'indexedjobs', enabled: false,
+    cadence_min: 60, min_cadence: 60, max_cadence: 120,
+    params: { assumeIndia: true, query: 'startup junior backend OR full stack OR AI engineer OR software engineering intern India since yesterday' } },
+  { ...fast, id: 'x-hiring-india', name: 'X hiring posts · requires X_BEARER_TOKEN', kind: 'xjobs', enabled: false,
+    params: { query: '(hiring OR internship) (backend OR fullstack OR "AI engineer" OR "software engineer" OR SDE) (India OR Bengaluru OR Bangalore OR remote) -is:retweet lang:en' } },
+  ...[
+    ['linkedin', 'LinkedIn Jobs', 'https://www.linkedin.com/jobs/search/?keywords=software%20engineer&location=India&f_TPR=r86400&f_E=1%2C2&sortBy=DD'],
+    ['indeed', 'Indeed India', 'https://in.indeed.com/jobs?q=software+engineer+fresher&fromage=1&sort=date'],
+    ['naukri', 'Naukri', 'https://www.naukri.com/software-engineer-jobs?k=software%20engineer&experience=0&jobAge=1'],
+  ].map(([id, name, url]) => ({ ...fast, cadence_min: 20, id: 'reader-' + id, name: name + ' · public listings', kind: 'reader', params: { url, assumeIndia: true } })),
+
   // Indian startup funding & tech news (Seed & early stage announcements)
   { id: 'inc42', name: 'Inc42', kind: 'rss', params: { url: 'https://inc42.com/feed/' }, cadence_min: 30 },
   { id: 'inc42-buzz', name: 'Inc42 Buzz', kind: 'rss', params: { url: 'https://inc42.com/buzz/feed/' }, cadence_min: 30 },

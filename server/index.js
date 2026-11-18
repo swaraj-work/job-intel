@@ -18,10 +18,10 @@ const llm = await import('./pipeline/llm.js');
 
 // Seed the source catalogue. System sources pick up improved names and queries; enabled and cadence stay as the user set them.
 for (const s of SEED_SOURCES) {
-  q.run(`INSERT INTO sources(id, name, kind, category, params, cadence_min, min_cadence, max_cadence, created_by)
-    VALUES(?,?,?,?,?,?,?,?, 'system')
+  q.run(`INSERT INTO sources(id, name, kind, category, params, cadence_min, min_cadence, max_cadence, enabled, created_by)
+    VALUES(?,?,?,?,?,?,?,?,?, 'system')
     ON CONFLICT(id) DO UPDATE SET name = excluded.name, params = excluded.params WHERE sources.created_by = 'system'`,
-    s.id, s.name, s.kind, s.category || 'leads', JSON.stringify(s.params), s.cadence_min || 60, s.min_cadence || 15, s.max_cadence || 720);
+    s.id, s.name, s.kind, s.category || 'leads', JSON.stringify(s.params), s.cadence_min || 60, s.min_cadence || 15, s.max_cadence || 720, s.enabled === false ? 0 : 1);
 }
 for (const id of RETIRED_SOURCES) q.run(`UPDATE sources SET enabled = 0 WHERE id = ? AND created_by = 'system'`, id);
 

@@ -1,6 +1,8 @@
 // Cheap regex gate in front of the LLM. Drops roughly 80-90% of items.
 import { classifyIntel, classifyReddit } from './intel.js';
 
+import { matchOpening } from './opportunities.js';
+
 const RE = {
   india: /\b(india|indian|bharat|bengaluru|bangalore|mumbai|delhi|ncr|gurugram|gurgaon|noida|pune|hyderabad|chennai|kolkata|ahmedabad|jaipur|surat|kochi|chandigarh|indore|coimbatore|lucknow|remote)\b|₹|\b(crore|lakh)s?\b|\brs\.?\s?\d|\binr\b/i,
   funding: /\b(raises?|raised|raising|secures?|secured|bags?|bagged|lands?|nets?|mops? up|closes?|funding|funded|seed|pre-seed|angel round|series [a-f]|pre-series|investment|invests?|backed|led by|valuation|debt round|bridge round)\b/i,
@@ -15,6 +17,10 @@ export function prefilter(item, source) {
   const hits = {};
   for (const [k, re] of Object.entries(RE)) hits[k] = re.test(text);
 
+  if (item.meta?.job) {
+    const match = matchOpening(item, source);
+    return { pass: !!match, route: 'job', reason: match ? null : 'outside target profile', hits };
+  }
   if (item.meta?.entity) return { pass: true, route: 'structured', hits };
 
   const cat = source.category;

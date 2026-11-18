@@ -199,12 +199,12 @@ function structuredLead(item, cfg) {
     payment_pain: null,
     confidence: 0.88,
     event: {
-      type: hiring ? 'hiring' : 'funding',
+      type: 'directory',
       title: hiring ? `YC ${e.batch} startup is actively hiring` : `Backed by Y Combinator (${e.batch})`,
       summary: clip(item.summary, 400),
-      stage: 'Seed',
-      amount_text: '$500K (YC deal)',
-      amount_usd_m: 0.5,
+      stage: null,
+      amount_text: null,
+      amount_usd_m: null,
       investors: ['Y Combinator'],
       signals: ['YC-backed', hiring ? 'actively hiring' : null, e.batch ? `YC ${e.batch}` : null].filter(Boolean),
       competitors: [],
@@ -282,7 +282,7 @@ const SCHEMA = () => ({
 });
 
 const SYSTEM = `You are the startup talent intelligence analyst for an ambitious software engineer looking for high-growth early-stage startups to join.
-Target companies: Startups (especially Seed, Pre-Seed, Angel, Series A, and Y Combinator companies) that recently raised funding or are actively hiring developers, engineers, and product builders.
+Target companies: Startups (especially Seed, Pre-Seed, Angel, Series A, and Y Combinator companies) that recently raised funding or are hiring AI, backend, full-stack, SDE I or software interns with 0–2 years of experience. Separate funding prospects from advertised roles. Skip senior-only openings and job-seeker posts.
 
 Your job for each news item / post:
 1. "leads": extract ONLY real, specifically named operating startups/companies that are the SUBJECT of the item (raising money, launching products, or hiring). Never extract investors, venture capital firms, publishers, or government bodies. Skip roundups unless one startup is clearly the focus.
@@ -305,7 +305,7 @@ function feedbackHints() {
   const disliked = q.all("SELECT name, sector, why FROM companies WHERE feedback = -1 ORDER BY updated_at DESC LIMIT 5");
   if (!liked.length && !disliked.length) return '';
   const f = (r) => `- ${r.name} (${r.sector})`;
-  return `\nSales feedback so far (calibrate relevance to this):\nLiked:\n${liked.map(f).join('\n') || '- none'}\nRejected:\n${disliked.map(f).join('\n') || '- none'}\n`;
+  return `\nCandidate feedback so far (calibrate relevance to this):\nLiked:\n${liked.map(f).join('\n') || '- none'}\nRejected:\n${disliked.map(f).join('\n') || '- none'}\n`;
 }
 
 async function llmBatch(batch) {
@@ -331,7 +331,14 @@ export async function extractBatch(batch) {
   const needLlm = [];
   batch.forEach((b, idx) => {
     if (b.route === 'structured') results[idx] = { leads: [structuredLead(b.item, cfg)], intel: null, via: 'structured' };
-    else needLlm.push(idx);
+    else if (b.route === 'job') {
+      const { title, summary, meta } = b.item;
+      const job = meta.job;
+      results[idx] = { via: 'structured', intel: null, leads: job.company ? [{
+        name: job.company, city: job.location, confidence: 0.9, sector: guessSector(title + ' ' + summary),
+        event: { type: 'hiring', title, summary: clip(summary, 500), signals: [title] }
+      }] : [] };
+    } else needLlm.push(idx);
   });
 
   if (needLlm.length && llm.available()) {
