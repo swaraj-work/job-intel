@@ -10,6 +10,7 @@ const txt = (x) => (x == null ? '' : typeof x === 'object' ? (x['#text'] ?? '') 
 // Each item: { url, title, summary, published_at, meta? }
 // meta.entity lets a structured source skip LLM extraction.
 export function parseFeed(body) {
+  if (/<!DOCTYPE\b/i.test(body)) throw new Error('Feed document types are not supported');
   const doc = xml.parse(body);
   if (doc.rss?.channel) {
     return arr(doc.rss.channel.item).map((it) => ({
@@ -45,6 +46,8 @@ async function redditOAuth(p) {
   if (!redditToken || redditToken.exp < Date.now()) {
     const res = await fetch('https://www.reddit.com/api/v1/access_token', {
       method: 'POST',
+      signal: AbortSignal.timeout(15_000),
+      redirect: 'error',
       headers: {
         authorization: `Basic ${Buffer.from(`${process.env.REDDIT_CLIENT_ID}:${process.env.REDDIT_CLIENT_SECRET}`).toString('base64')}`,
         'content-type': 'application/x-www-form-urlencoded',

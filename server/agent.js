@@ -22,6 +22,7 @@ function addAgentQuery(query, name, why) {
   const cfg = getConfig();
   const id = `agent-${sha1(query).slice(0, 10)}`;
   if (q.get('SELECT 1 FROM sources WHERE id = ?', id)) return null;
+  if (q.get("SELECT COUNT(*) AS n FROM sources WHERE created_by = 'agent' AND enabled = 1").n >= 30) return null;
   const expires = new Date(Date.now() + cfg.agent.queryTtlDays * 86400000).toISOString();
   q.run(`INSERT INTO sources(id, name, kind, category, params, cadence_min, min_cadence, max_cadence, created_by, expires_at)
     VALUES(?,?,?,?,?,?,?,?,?,?)`, id, name || `Agent: ${query.replace(/ when:\d+d$/, '')}`, 'gnews', 'leads', JSON.stringify({ query, why }), 240, 120, 1440, 'agent', expires);
@@ -106,9 +107,4 @@ export function lookalike(companyId) {
   const ids = queries.map((qq) => addAgentQuery(qq, `Lookalike of ${c.name}: ${qq.replace(/ when:\d+d$/, '')}`, `like ${c.name}`)).filter(Boolean);
   for (const id of ids) runSource(id).catch(() => {});
   return ids;
-}
-
-export function startAgent() {
-  setTimeout(() => agentCycle().catch((e) => log('error', `Agent: ${e.message}`)), 90_000);
-  setInterval(() => agentCycle().catch((e) => log('error', `Agent: ${e.message}`)), 5 * 60_000);
 }

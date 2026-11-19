@@ -1,17 +1,40 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 
 // On Railway, an attached volume is exposed as RAILWAY_VOLUME_MOUNT_PATH; keep the DB there so it survives deploys.
 const DB_PATH = process.env.DB_PATH
-  || (process.env.RAILWAY_VOLUME_MOUNT_PATH && path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'leadintel.db'))
-  || path.resolve('data/leadintel.db');
-fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+  || (process.env.RAILWAY_VOLUME_MOUNT_PATH && path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'jobintel.db'))
+  || path.resolve('data/jobintel.db');
+const scope = new AsyncLocalStorage();
+const workspaces = new Map();
+const workspaceDir = path.resolve(process.env.WORKSPACE_DIR || `${DB_PATH}.workspaces`);
 
-export const db = new DatabaseSync(DB_PATH);
-db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+export const workspaceId = () => scope.getStore() || null;
 
-db.exec(`
+export function inWorkspace(id, fn) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id)) throw new Error('Invalid workspace ID');
+  return scope.run(id, fn);
+}
+
+export const inCatalog = (fn) => scope.run(null, fn);
+
+function addColumn(db, table, column, type) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!columns.some(({ name }) => name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+}
+
+function openDatabase(filename, catalog = false) {
+  fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
+  const db = new DatabaseSync(filename);
+  if (catalog && db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'settings'").get() &&
+      !db.prepare("SELECT 1 FROM settings WHERE key = 'multi_user_catalog'").get()) {
+    db.close();
+    throw new Error('DB_PATH points to an existing single-user database. Set DB_PATH to a fresh catalog file.');
+  }
+  db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+  db.exec(`
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -156,7 +179,7 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 `);
 
 // People at a company we might reach out to. Every row records where it came from (DPDP provenance).
-db.exec(`
+  db.exec(`
 CREATE TABLE IF NOT EXISTS contacts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
@@ -193,34 +216,96 @@ CREATE INDEX IF NOT EXISTS idx_outreach_sent ON outreach_log(sent_at);
 CREATE INDEX IF NOT EXISTS idx_outreach_company ON outreach_log(company_id);
 `);
 
-// Additive migrations for databases created by earlier versions (e.g. the Railway volume).
-function addColumn(table, col, type) {
-  const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
-  if (!cols.includes(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`);
+  // Additive migrations for databases created by earlier versions (e.g. the Railway volume).
+  addColumn(db, 'companies', 'team', 'TEXT');           // { min, max, exact, source, url, evidence, at }
+  addColumn(db, 'companies', 'people_checked_at', 'TEXT');
+  addColumn(db, 'companies', 'application_status', "TEXT NOT NULL DEFAULT 'new'"); // new | sent | replied | interview | offer | rejected | archived
+  addColumn(db, 'companies', 'sent_at', 'TEXT');
+  addColumn(db, 'companies', 'follow_up_at', 'TEXT');
+  addColumn(db, 'companies', 'tech_stack', "TEXT NOT NULL DEFAULT '[]'");
+  addColumn(db, 'companies', 'email_draft', 'TEXT');
+  addColumn(db, 'companies', 'outreach_subject', 'TEXT');
+  addColumn(db, 'companies', 'pitch_subject', 'TEXT');
+  addColumn(db, 'companies', 'role_match', 'TEXT');
+  addColumn(db, 'intel', 'meta', 'TEXT');                // classifier tags: topic, or Reddit sub/segment/intent/signals
+  addColumn(db, 'intel', 'score', 'INTEGER');            // Reddit buyer-intent score 0..100
+  addColumn(db, 'intel', 'status', "TEXT NOT NULL DEFAULT 'new'"); // Reddit triage: new | replied | lead | ignored
+  addColumn(db, 'intel', 'coverage', 'INTEGER NOT NULL DEFAULT 1'); // how many outlets ran the same story
+
+  db.exec(`CREATE TABLE IF NOT EXISTS traction (
+  company_id INTEGER PRIMARY KEY REFERENCES companies(id) ON DELETE CASCADE,
+  domain TEXT NOT NULL,
+  data TEXT,
+  error TEXT,
+  cost REAL NOT NULL DEFAULT 0,
+  fetched_at TEXT NOT NULL
+)`);
+
+  db.exec(`CREATE TABLE IF NOT EXISTS sprouts_company (
+  company_id INTEGER PRIMARY KEY REFERENCES companies(id) ON DELETE CASCADE,
+  domain TEXT NOT NULL,
+  found INTEGER NOT NULL,
+  data TEXT,          -- normalised fields shown in the UI
+  raw TEXT,           -- the record as returned, so field mapping can be fixed later without paying again
+  fetched_at TEXT NOT NULL
+)`);
+  // Ledger of every request, the basis for caps and the usage line in the UI.
+  db.exec(`CREATE TABLE IF NOT EXISTS sprouts_calls (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,       -- account | contact | enrich
+  company_id INTEGER,
+  contact_id INTEGER,
+  records INTEGER NOT NULL DEFAULT 0,
+  ok INTEGER NOT NULL DEFAULT 1,
+  at TEXT NOT NULL
+)`);
+  addColumn(db, 'contacts', 'sprouts_checked_at', 'TEXT');
+  db.exec(`
+  CREATE TABLE IF NOT EXISTS activity (
+    id INTEGER PRIMARY KEY,
+    entry TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS job_state (
+    raw_id INTEGER PRIMARY KEY REFERENCES raw_items(id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN ('saved','applied','dismissed'))
+  );
+`);
+  if (catalog) db.exec("INSERT OR IGNORE INTO settings VALUES ('multi_user_catalog', 'true')");
+  return db;
 }
-addColumn('companies', 'team', 'TEXT');           // { min, max, exact, source, url, evidence, at }
-addColumn('companies', 'people_checked_at', 'TEXT');
-addColumn('companies', 'application_status', "TEXT NOT NULL DEFAULT 'new'"); // new | sent | replied | interview | offer | rejected | archived
-addColumn('companies', 'sent_at', 'TEXT');
-addColumn('companies', 'follow_up_at', 'TEXT');
-addColumn('companies', 'tech_stack', "TEXT NOT NULL DEFAULT '[]'");
-addColumn('companies', 'email_draft', 'TEXT');
-addColumn('companies', 'outreach_subject', 'TEXT');
-addColumn('companies', 'role_match', 'TEXT');
-addColumn('intel', 'meta', 'TEXT');                // classifier tags: topic, or Reddit sub/segment/intent/signals
-addColumn('intel', 'score', 'INTEGER');            // Reddit buyer-intent score 0..100
-addColumn('intel', 'status', "TEXT NOT NULL DEFAULT 'new'"); // Reddit triage: new | replied | lead | ignored
-addColumn('intel', 'coverage', 'INTEGER NOT NULL DEFAULT 1'); // how many outlets ran the same story
+
+export const db = openDatabase(DB_PATH, true);
+
+function workspaceDatabase() {
+  const id = workspaceId();
+  if (!id) return db;
+  const connection = workspaces.get(id) || openDatabase(path.join(workspaceDir, `${id}.db`));
+  workspaces.delete(id);
+  workspaces.set(id, connection);
+  if (workspaces.size > 32) {
+    const [oldest, previous] = workspaces.entries().next().value;
+    previous.close();
+    workspaces.delete(oldest);
+  }
+  return connection;
+}
+
+export function closeDatabases() {
+  for (const connection of workspaces.values()) connection.close();
+  workspaces.clear();
+  db.close();
+}
 
 export const nowIso = () => new Date().toISOString();
 
 export const q = {
-  get: (sql, ...p) => db.prepare(sql).get(...p),
-  all: (sql, ...p) => db.prepare(sql).all(...p),
-  run: (sql, ...p) => db.prepare(sql).run(...p),
+  get: (sql, ...p) => workspaceDatabase().prepare(sql).get(...p),
+  all: (sql, ...p) => workspaceDatabase().prepare(sql).all(...p),
+  run: (sql, ...p) => workspaceDatabase().prepare(sql).run(...p),
 };
 
 export function tx(fn) {
+  const db = workspaceDatabase();
   db.exec('BEGIN');
   try {
     const r = fn();

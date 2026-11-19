@@ -1,17 +1,30 @@
 import { EventEmitter } from 'node:events';
+import { q, J, workspaceId } from './db.js';
 
-// In-process event bus feeding the SSE stream and the activity log.
-export const bus = new EventEmitter();
-bus.setMaxListeners(100);
+const events = new EventEmitter();
+events.setMaxListeners(0);
+const channel = (event) => `${workspaceId() || 'catalog'}:${event}`;
 
-const activity = [];
+export const bus = {
+  emit: (event, data) => events.emit(channel(event), data),
+  on(event, handler) {
+    const key = channel(event);
+    events.on(key, handler);
+    return () => events.off(key, handler);
+  },
+};
 
 export function log(type, msg, data) {
   const entry = { ts: new Date().toISOString(), type, msg, ...(data ? { data } : {}) };
-  activity.push(entry);
-  if (activity.length > 400) activity.shift();
+  q.run('INSERT INTO activity (entry) VALUES (?)', JSON.stringify(entry));
+  q.run('DELETE FROM activity WHERE id <= (SELECT MAX(id) - 400 FROM activity)');
   bus.emit('activity', entry);
-  if (process.env.QUIET !== '1') console.log(`[${entry.ts.slice(11, 19)}] ${type.padEnd(8)} ${msg}`);
+  if (!workspaceId() && process.env.QUIET !== '1') {
+    console.log(`[${entry.ts.slice(11, 19)}] ${type.padEnd(8)} ${msg}`);
+  }
 }
 
-export const recentActivity = (n = 100) => activity.slice(-n).reverse();
+export function recentActivity(n = 100) {
+  return q.all('SELECT entry FROM activity ORDER BY id DESC LIMIT ?', Math.max(1, Math.min(400, Math.floor(n))))
+    .map(({ entry }) => J(entry, {}));
+}

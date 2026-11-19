@@ -27,6 +27,7 @@
   </nav>
   <div class="top-actions">
     <select class="appearance" id="appearance" aria-label="Appearance"><option value="system">System theme</option><option value="light">Light mode</option><option value="dark">Dark mode</option></select>
+    <button class="btn" id="logoutBtn" title="Signed-in account">Sign out</button>
     <button class="btn primary scan" id="scanBtn"><span class="spinner"></span><span>Scan now</span></button>
   </div>
 </header>
@@ -35,7 +36,9 @@
   <section class="view" id="view-jobs">
     <div class="hero"><h1>Job inbox</h1><a class="link small" href="#reddit">Reddit hiring posts →</a></div>
     <div class="job-controls">
-      <label>Posted <select class="input" id="jobHours"><option value="1">Past hour</option><option value="24" selected>Past 24 hours</option><option value="168">Past 7 days</option><option value="undated">Undated · found this week</option></select></label>
+      <label>Search <input class="input" type="search" id="jobQuery" maxlength="120" placeholder="Role, company or skill"></label>
+      <label>View <select class="input" id="jobView"><option value="personal">For You</option><option value="all">All posts</option><option value="saved">Saved</option><option value="applied">Applied</option><option value="dismissed">Dismissed</option></select></label>
+      <label id="jobHoursLabel">Posted <select class="input" id="jobHours"><option value="1">Past hour</option><option value="24" selected>Past 24 hours</option><option value="168">Past 7 days</option><option value="undated">Undated · found this week</option></select></label>
       <label>Show <select class="input" id="jobType"><option value="openings">Hiring posts</option><option value="funding">Funding signals</option></select></label>
       <label id="jobStartupLabel">Company <select class="input" id="jobStartup"><option value="">All companies</option><option value="startup">Startup signals only</option></select></label>
       <label id="jobLevelLabel">Experience <select class="input" id="jobLevel"><option value="">All matches</option><option>Internship</option><option>Early career</option><option>Experience unspecified</option></select></label>
@@ -169,7 +172,7 @@
         <h1>Profile</h1>
       </div>
       <div class="hero-actions">
-        <button class="btn" id="logoutBtn" hidden>Sign out</button>
+        <div class="small muted" id="accountEmail"></div>
       </div>
     </div>
 

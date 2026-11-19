@@ -41,3 +41,21 @@ export function fundingSignal(title) {
   return /\b(?:raises?|raised|secures?|secured|bags?|closes?|lands?|nets?|mops up|snags?)\b.{0,85}(?:\$|₹|\b(?:rs\.?|crore|million|seed|series [a-c]|funding|investment|round)\b)/i.test(title)
     && !/\b(?:aims? to|plans? to|in talks to|seeks? to|to raise|fund [IVX]+|launches? (?:a |an? )?fund|weekly roundup)\b/i.test(title);
 }
+
+export function profileMatch(item, match, candidate) {
+  const text = [item.title, item.summary, match.location].join(' ').toLowerCase();
+  const roles = candidate.targetRoles || [];
+  const exactRole = roles.some(role => role && text.includes(role.toLowerCase()));
+  const relatedRole = roles.some(role => rolePatterns.some(([label, pattern]) => label === match.role && pattern.test(role)));
+  const skills = (candidate.skills || []).filter(skill => {
+    if (!skill) return false;
+    const escaped = skill.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(?:^|[^a-z0-9])${escaped}(?:$|[^a-z0-9])`, 'i').test(text);
+  }).slice(0, 5);
+  const locations = (candidate.location || '').toLowerCase().split(/[\/,;]+/).map(location => location.trim()).filter(Boolean);
+  const location = locations.some(place => text.includes(place) || (place === 'bangalore' && text.includes('bengaluru')) || (place === 'bengaluru' && text.includes('bangalore')));
+  const wantsInternship = roles.some(role => /\bintern/i.test(role));
+  const experience = (wantsInternship && match.level === 'Internship') ||
+    (/fresher|junior|entry|0\s*[-–]\s*2/i.test(candidate.experience || '') && match.level === 'Early career');
+  return { score: (exactRole ? 6 : relatedRole ? 3 : 0) + skills.length * 2 + (location ? 2 : 0) + (experience ? 1 : 0), skills };
+}

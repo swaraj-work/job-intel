@@ -1,6 +1,6 @@
 # JobIntel · Automated Founder Outreach & Job Discovery Engine
 
-The default **Latest jobs** inbox tracks AI, backend, full-stack, SDE I and software internships for early-career candidates in India. Choose the past hour, 24 hours or seven days. The inbox uses publication time, marks relative timestamps as approximate and groups undated items found this week separately. Use the experience and startup filters to narrow results. Open a post to apply or reply, or open **Company & outreach** when a pipeline record is available.
+The default **Latest jobs** inbox tracks AI, backend, full-stack, SDE I and software internships for early-career candidates in India. Choose the past hour, 24 hours or seven days. The inbox uses publication time, marks relative timestamps as approximate and groups undated items found this week separately. Use search, experience and startup filters to narrow results. The **For You** view uses your profile to rank matches, and each account keeps its own saved, applied and dismissed posts. Open a post to apply or reply, or open **Company & outreach** when a pipeline record is available.
 
 **Funding signals** surfaces fundraising articles for outreach before a role is advertised. The Daily 20 and Pipeline views track companies, contacts, drafts and follow-ups.
 
@@ -8,7 +8,7 @@ The default **Latest jobs** inbox tracks AI, backend, full-stack, SDE I and soft
 
 - Scheduled public sources include YC India job listings, employer comments in Hacker News’ monthly hiring thread, r/bangalorejob, developer subreddits, Indian funding news, and the careers boards of Sarvam, Meraki Labs, Certa and Composio. Add an Ashby board by its slug or add an RSS/Atom feed under **Sources**.
 - LinkedIn Jobs, Indeed India and Naukri have public search pages configured through Jina Reader. Coverage depends on the publisher returning public listing links. The source panel shows fetch errors, including verification pages. Custom Reader sources accept a public careers page URL. Reader can parse job links and nearby timestamps from Markdown. [Jina Reader](https://jina.ai/reader/)
-- To monitor X, set `X_BEARER_TOKEN` and enable the X source. For additional board coverage, set `SERPAPI_API_KEY` and enable Google Jobs. Indexed results link to the provider’s application page. Both integrations use the connected account’s search quota. [X recent search](https://docs.x.com/x-api/posts/search/quickstart/recent-search) · [Google Jobs provider](https://serpapi.com/google-jobs-api)
+- To monitor X, set `X_BEARER_TOKEN`. For additional board coverage, set `SERPAPI_API_KEY`. Indexed results link to the provider’s application page. Both integrations use the service’s search quota. The server enables their built-in sources when credentials are set. [X recent search](https://docs.x.com/x-api/posts/search/quickstart/recent-search) · [Google Jobs provider](https://serpapi.com/google-jobs-api)
 - New high-frequency sources generally poll every 10–20 minutes. The inbox refreshes every 30 seconds while visible. Host throttling and third-party indexing can delay discovery.
 
 ## The 20-Emails-A-Day Strategy
@@ -58,27 +58,28 @@ get flooded.                 hire directly without HR).     and your core stack.
 ### 2. Setup
 ```bash
 git clone <repo>
-cd pg-intel
+cd job-intel
 npm install
 ```
 
-### 3. Environment Variables (Optional)
+### 3. Configure Google sign-in
 Copy `.env.example` to `.env`:
 ```bash
 cp .env.example .env
 ```
+In Google Cloud, create a **Web application** OAuth client with an external audience and publish the app to allow general Google-account signups. Register `http://localhost:4300/auth/google/callback` for local development and `https://YOUR-DOMAIN/auth/google/callback` for deployment. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and the production `APP_ORIGIN` in the service environment. Railway’s public service domain is used when `APP_ORIGIN` is unset. The sign-in flow requests identity permissions. The existing **Open in Gmail** action opens a draft in Gmail.
+
 Key configuration options:
 - `PORT`: Server port (default: `4300`)
 - `GROQ_API_KEY` or `GEMINI_API_KEY`: Enables LLM extraction and bespoke email personalization (if omitted, high-speed heuristic rules run with zero cost).
 - `APOLLO_API_KEY` or `HUNTER_API_KEY`: Enables automatic verified founder work email lookups.
-- `AUTH_USERNAME` and `AUTH_PASSWORD` configure sign-in. Both default to `admin` when blank. Set a private password in Railway's service variables before exposing real lead data.
-- `SESSION_SECRET` can be set to a random secret to keep sessions valid across restarts.
+- Provider calls against service-owned credentials are capped across all accounts. See the `*_SHARED_DAILY_CAP` settings in `.env.example`.
 
 ### 4. Run the Engine
 ```bash
 npm start
 ```
-Open [http://localhost:4300](http://localhost:4300) in your browser.
+Open [http://localhost:4300](http://localhost:4300) in your browser. Run `npm test` to check sign-in, workspace isolation, and discovery.
 
 If Railway's install step reports the npm production config warning, remove `NPM_CONFIG_PRODUCTION` from the service variables and use `NPM_CONFIG_OMIT=dev` for production-only installs.
 
@@ -160,5 +161,5 @@ Best,
 ## Ethical & Privacy Guardrails
 - **No Scraping Gated Networks**: We never scrape LinkedIn profiles or private directories. Links to LinkedIn searches allow the user to review public profiles directly.
 - **Verified Business Emails Only**: Only business email addresses obtained through sanctioned APIs (Apollo, Hunter) or publicly declared company inboxes are utilized.
-- **Strict Rate Limiting**: All sources adhere to polite robots.txt intervals with automatic backoff.
-- **Local SQLite Storage**: All pipeline state is stored locally in `data/leadintel.db` using Node's native SQLite with zero external database dependencies.
+- **Source limits**: Fetches are paced by host, back off after rate limits, and block private network destinations.
+- **SQLite storage**: The catalog database stores Google identities, sessions, and built-in discovery. Private state lives in one SQLite file per account in the workspace directory. On a single Railway replica, mount a persistent volume for both the catalog and workspace files. Their default paths are `data/jobintel.db` and `data/jobintel.db.workspaces` locally, or the corresponding paths under the Railway volume. The app expects a fresh catalog and does not import the legacy single-user database. Public data is fetched centrally. Private source polling and enrichment run for recently active accounts and resume when the account returns.

@@ -1,6 +1,7 @@
-import { q } from '../db.js';
+import { q, getSetting, setSetting } from '../db.js';
 import { getConfig } from '../config.js';
 import { log } from '../bus.js';
+import { claimServiceCall } from '../util/limits.js';
 
 // Provider-agnostic surface: llm.available(), llm.json(system, prompt, schema), llm.usage().
 // Groq (OpenAI-compatible, fast) is preferred when GROQ_API_KEY is set; Gemini is the fallback.
@@ -19,7 +20,6 @@ function provider() {
 let chain = Promise.resolve();
 let nextAt = 0;
 let cooldownUntil = 0;
-let lastError = null;
 // Groq's free tier is limited by tokens per minute, so pace on what the API says is left rather than a fixed gap.
 const budget = { remaining: null, resetAt: 0 };
 
@@ -28,7 +28,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 export function usage() {
   const p = provider();
   const row = q.get('SELECT * FROM llm_usage WHERE day = ?', today()) || { calls: 0, tokens_in: 0, tokens_out: 0, failures: 0 };
-  return { provider: p || 'none', label: p ? PROVIDERS[p].label : null, model: p ? PROVIDERS[p].model() : null, cap: getConfig().llm.dailyCallCap, cooling: cooldownUntil > Date.now(), lastError, ...row };
+  return { provider: p || 'none', label: p ? PROVIDERS[p].label : null, model: p ? PROVIDERS[p].model() : null, cap: getConfig().llm.dailyCallCap, cooling: cooldownUntil > Date.now(), lastError: getSetting('llm_last_error', null), ...row };
 }
 
 export function available() {
@@ -46,6 +46,7 @@ function track(tin, tout, failed) {
 export function json(system, prompt, schema, { temperature = 0.1, maxTokens = 8192 } = {}) {
   const run = chain.then(async () => {
     if (!available()) throw new Error('LLM unavailable (no key, cooling down, or daily cap reached)');
+    claimServiceCall('llm', 300);
     const p = provider();
     let wait = nextAt - Date.now();
     if (p === 'groq' && budget.remaining != null) {
@@ -64,7 +65,8 @@ export function json(system, prompt, schema, { temperature = 0.1, maxTokens = 81
 function fail(label, status, msg, retryAfterMs) {
   if (status === 429 || status === 503) cooldownUntil = Date.now() + (retryAfterMs || 90_000);
   else if (status >= 400 && status < 500) cooldownUntil = Date.now() + 10 * 60_000; // bad key/model: stop hammering, rules take over
-  lastError = `${status}: ${String(msg).slice(0, 200)}`;
+  const lastError = `${status}: ${String(msg).slice(0, 200)}`;
+  setSetting('llm_last_error', lastError);
   track(0, 0, true);
   log('llm', `${label} error ${lastError}`);
   return new Error(`${label} ${lastError}`);
@@ -123,7 +125,7 @@ async function callGroq(system, prompt, schema, temperature, maxTokens) {
     }
     const text = j.choices?.[0]?.message?.content || '';
     track(j.usage?.prompt_tokens || 0, j.usage?.completion_tokens || 0, false);
-    lastError = null;
+    setSetting('llm_last_error', null);
     return parseJsonLoose(text);
   } finally {
     clearTimeout(timer);
@@ -155,7 +157,7 @@ async function callGemini(system, prompt, schema, temperature, maxTokens) {
     const text = (body.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
     const u = body.usageMetadata || {};
     track(u.promptTokenCount || 0, u.candidatesTokenCount || 0, false);
-    lastError = null;
+    setSetting('llm_last_error', null);
     return parseJsonLoose(text);
   } finally {
     clearTimeout(timer);

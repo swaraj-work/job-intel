@@ -1,4 +1,4 @@
-import { q, J, nowIso } from '../db.js';
+import { q, J, nowIso, workspaceId } from '../db.js';
 import { getConfig } from '../config.js';
 import { prefilter } from './prefilter.js';
 import { saveIntel } from './intel-store.js';
@@ -6,32 +6,32 @@ import { extractBatch } from './extract.js';
 import { upsertLead } from './resolve.js';
 import { rescore } from './score.js';
 import { enrichCompany } from './enrich.js';
-import { targetPlan, saveTeam } from './people.js';
+import { targetPlan } from './people.js';
 import { findEmail, providerStatus } from './email-finders.js';
 import * as llm from './llm.js';
 import { bus, log } from '../bus.js';
 
-const sourceCache = new Map();
 function sourceOf(id) {
-  if (!sourceCache.has(id)) {
-    const s = q.get('SELECT * FROM sources WHERE id = ?', id);
-    sourceCache.set(id, s ? { ...s, params: J(s.params, {}) } : { id, name: id, kind: 'rss', category: 'leads', params: {} });
-    setTimeout(() => sourceCache.delete(id), 60_000);
-  }
-  return sourceCache.get(id);
+  const source = q.get('SELECT * FROM sources WHERE id = ?', id);
+  return source ? { ...source, params: J(source.params, {}) } : { id, name: id, kind: 'rss', category: 'leads', params: {} };
 }
 
-let busy = false;
-let enriching = false;
-export const stats = { processed: 0, passed: 0, leadsNew: 0, eventsNew: 0, intelNew: 0, lastBatchAt: null, via: { llm: 0, rules: 0, structured: 0 } };
+const processing = new Set();
+const enriching = new Set();
+export function processorStats() {
+  return J(q.get("SELECT value FROM settings WHERE key = 'processor_stats'")?.value,
+    { processed: 0, passed: 0, leadsNew: 0, eventsNew: 0, intelNew: 0, lastBatchAt: null, via: { llm: 0, rules: 0, structured: 0 } });
+}
 
-async function processBatch() {
-  if (busy) return;
-  busy = true;
+export async function processBatch() {
+  const id = workspaceId();
+  if (processing.has(id)) return;
+  processing.add(id);
   try {
+    const stats = processorStats();
     const cfg = getConfig();
     // Newest first so the demo always shows today's news quickly.
-    const rows = q.all(`SELECT * FROM raw_items WHERE status = 'new' ORDER BY COALESCE(published_at, fetched_at) DESC LIMIT 60`);
+    const rows = q.all(`SELECT * FROM raw_items r WHERE status = 'new' AND NOT EXISTS (SELECT 1 FROM sources s WHERE s.id = r.source_id AND s.enabled = 0) ORDER BY COALESCE(published_at, fetched_at) DESC LIMIT 60`);
     if (!rows.length) return;
 
     const batch = [];
@@ -50,7 +50,10 @@ async function processBatch() {
       batch.push({ item, source, route: pf.route, cls: pf.cls, rawId: r.id });
       if (batch.length >= (llm.available() ? cfg.llm.batchSize : 25)) break;
     }
-    if (!batch.length) return;
+    if (!batch.length) {
+      q.run(`INSERT OR REPLACE INTO settings VALUES ('processor_stats', ?)`, JSON.stringify(stats));
+      return;
+    }
 
     const results = await extractBatch(batch);
     const touched = new Set();
@@ -79,6 +82,7 @@ async function processBatch() {
     });
     for (const id of touched) rescore(id);
     stats.lastBatchAt = nowIso();
+    q.run(`INSERT OR REPLACE INTO settings VALUES ('processor_stats', ?)`, JSON.stringify(stats));
     const v = results[0]?.via;
     log('process', `Processed ${batch.length} items via ${v}: ${touched.size} companies touched`);
     bus.emit('stats');
@@ -86,13 +90,14 @@ async function processBatch() {
     log('error', `Processor: ${e.message}`);
     q.run(`UPDATE raw_items SET status='new' WHERE status='processing'`);
   } finally {
-    busy = false;
+    processing.delete(id);
   }
 }
 
-async function enrichLoop() {
-  if (enriching) return;
-  enriching = true;
+export async function enrichLoop() {
+  const workspace = workspaceId();
+  if (enriching.has(workspace) || enriching.size >= 3) return;
+  enriching.add(workspace);
   try {
     const cfg = getConfig();
     // people_checked_at IS NULL also picks up companies enriched before people research existed.
@@ -106,7 +111,7 @@ async function enrichLoop() {
   } catch (e) {
     log('error', `Enrichment: ${e.message}`);
   } finally {
-    enriching = false;
+    enriching.delete(workspace);
   }
 }
 
@@ -122,29 +127,6 @@ async function autoFindEmail(id, cfg) {
   const primary = plan.primaryId && q.get('SELECT * FROM contacts WHERE id = ?', plan.primaryId);
   if (!primary || primary.email || primary.email_checked_at) return;
   await findEmail(primary.id).catch((e) => log('error', `Email lookup: ${e.message}`));
-}
-
-// One-off: YC companies ingested before team sizes were recorded get theirs from the stored item.
-function backfillYcTeams() {
-  const rows = q.all(`SELECT r.meta, r.url FROM raw_items r WHERE r.source_id = 'yc-india' AND r.meta LIKE '%"team_size"%'`);
-  let n = 0;
-  for (const r of rows) {
-    const e = J(r.meta, {}).entity;
-    if (!e?.team_size) continue;
-    const c = q.get(`SELECT c.id FROM companies c JOIN events ev ON ev.company_id = c.id WHERE ev.url = ? AND c.team IS NULL LIMIT 1`, r.url);
-    if (!c) continue;
-    saveTeam(c.id, { min: e.team_size, max: e.team_size, exact: true, source: 'yc', url: r.url, evidence: `Team size listed on Y Combinator (${e.batch})` });
-    n++;
-  }
-  if (n) log('people', `Backfilled team size for ${n} YC companies`);
-}
-
-export function startProcessor() {
-  backfillYcTeams();
-  q.run(`UPDATE raw_items SET status='new' WHERE status='processing'`);
-  setInterval(processBatch, 4000);
-  setInterval(enrichLoop, 15000);
-  setTimeout(processBatch, 1500);
 }
 
 export const queueDepth = () => q.get(`SELECT COUNT(*) n FROM raw_items WHERE status IN ('new','processing')`).n;

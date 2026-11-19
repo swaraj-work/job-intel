@@ -3,6 +3,7 @@
 // Until Sprouts confirms its billing rules we assume every answered request costs a credit.
 import { q, J, nowIso } from '../db.js';
 import { log } from '../bus.js';
+import { claimServiceCall } from '../util/limits.js';
 import { saveContacts, saveTeam, targetPlan, contactsOf } from './people.js';
 import { getConfig } from '../config.js';
 
@@ -11,27 +12,6 @@ const SNAPSHOT_DAYS = 30;        // company data changes slowly
 const NOT_FOUND_DAYS = 30;       // "Sprouts has nothing for this domain / person" is remembered this long
 const SEARCH_CAP = () => Number(process.env.SPROUTS_DAILY_SEARCH_CAP) || 25;
 export const configured = () => Boolean(process.env.SPROUTS_API_SECRET && process.env.SPROUTS_LOGIN_EMAIL && process.env.SPROUTS_CUSTOMER_ID);
-
-q.run(`CREATE TABLE IF NOT EXISTS sprouts_company (
-  company_id INTEGER PRIMARY KEY REFERENCES companies(id) ON DELETE CASCADE,
-  domain TEXT NOT NULL,
-  found INTEGER NOT NULL,
-  data TEXT,          -- normalised fields shown in the UI
-  raw TEXT,           -- the record as returned, so field mapping can be fixed later without paying again
-  fetched_at TEXT NOT NULL
-)`);
-// Ledger of every request, the basis for caps and the usage line in the UI.
-q.run(`CREATE TABLE IF NOT EXISTS sprouts_calls (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  kind TEXT NOT NULL,       -- account | contact | enrich
-  company_id INTEGER,
-  contact_id INTEGER,
-  records INTEGER NOT NULL DEFAULT 0,
-  ok INTEGER NOT NULL DEFAULT 1,
-  at TEXT NOT NULL
-)`);
-const cols = q.all('PRAGMA table_info(contacts)').map((c) => c.name);
-if (!cols.includes('sprouts_checked_at')) q.run('ALTER TABLE contacts ADD COLUMN sprouts_checked_at TEXT');
 
 export class SproutsError extends Error {}
 
@@ -58,6 +38,7 @@ function guardSearch() {
 let chain = Promise.resolve();
 let nextAt = 0;
 function call(path, body, ledger) {
+  claimServiceCall('sprouts', 25);
   const run = chain.then(async () => {
     const wait = nextAt - Date.now();
     if (wait > 0) await new Promise((r) => setTimeout(r, wait));

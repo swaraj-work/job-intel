@@ -1,29 +1,25 @@
-import { q, J, nowIso } from './db.js';
+import { q, J, nowIso, workspaceId, tx } from './db.js';
 import { fetchSource } from './sources/index.js';
 import { canonicalUrl, sha1, tokens, jaccard, daysAgo } from './util/text.js';
 import { getConfig } from './config.js';
 import { bus, log } from './bus.js';
 
-const MAX_CONCURRENT = 4;
-const running = new Set();
+const MAX_CATALOG_RUNS = 4;
+const MAX_PRIVATE_RUNS = 3;
+const MAX_PER_WORKSPACE = 1;
+const running = new Map();
 let timer = null;
 
-// Recent titles for near-duplicate detection across outlets (syndicated stories).
-const recentTitles = [];
+// Compare recent titles within the current discovery scope only.
 function isNearDup(title) {
-  const t = tokens(title);
-  if (t.length < 4) return false;
-  for (const r of recentTitles) if (jaccard(t, r) >= 0.75) return true;
-  recentTitles.push(t);
-  if (recentTitles.length > 3000) recentTitles.shift();
-  return false;
+  const words = tokens(title);
+  if (words.length < 4) return false;
+  const since = new Date(Date.now() - 4 * 86400_000).toISOString();
+  return q.all('SELECT title FROM raw_items WHERE fetched_at > ? ORDER BY id DESC LIMIT 250', since)
+    .some(row => jaccard(words, tokens(row.title)) >= 0.75);
 }
 
-export function warmDedupCache() {
-  for (const r of q.all("SELECT title FROM raw_items WHERE fetched_at > ? ORDER BY id DESC LIMIT 3000", new Date(Date.now() - 4 * 86400000).toISOString())) {
-    recentTitles.push(tokens(r.title));
-  }
-}
+const runKey = (id) => `${workspaceId() || 'catalog'}:${id}`;
 
 function hydrate(row) {
   return row && { ...row, params: J(row.params, {}) };
@@ -34,6 +30,7 @@ export function ingest(source, items) {
   let fresh = 0;
   const ins = 'INSERT OR IGNORE INTO raw_items(source_id, url, url_hash, title, summary, published_at, status, meta) VALUES(?,?,?,?,?,?,?,?)';
   for (const it of items) {
+    if (typeof it.url !== 'string' || !/^https?:\/\//i.test(it.url) || typeof it.title !== 'string' || !it.title) continue;
     const url = canonicalUrl(it.url);
     const hash = sha1(url);
     const existing = q.get('SELECT published_at FROM raw_items WHERE url_hash = ?', hash);
@@ -50,20 +47,39 @@ export function ingest(source, items) {
 }
 
 export async function runSource(id, { manual = false } = {}) {
-  if (running.has(id)) return { skipped: true };
+  const key = runKey(id);
+  const workspace = workspaceId();
+  const current = [...running.values()];
+  const privateRuns = current.filter(run => run.workspace);
+  if (running.has(key) || (workspace
+    ? privateRuns.length >= MAX_PRIVATE_RUNS || privateRuns.filter(run => run.workspace === workspace).length >= MAX_PER_WORKSPACE
+    : current.length - privateRuns.length >= MAX_CATALOG_RUNS)) return { skipped: true };
   const source = hydrate(q.get('SELECT * FROM sources WHERE id = ?', id));
   if (!source) throw new Error('Unknown source');
-  running.add(id);
+  if (workspaceId() && source.created_by === 'system') return { skipped: true, shared: true };
+  if (!source.enabled) return { skipped: true };
+  if (manual && source.last_run_at && Date.now() - Date.parse(source.last_run_at) < 60_000) return { skipped: true };
+  const host = hostOf(source, source.params);
+  if (current.some(run => run.host === host)) return { skipped: true };
   const started = nowIso();
   const run = q.run('INSERT INTO runs(source_id, started_at, status) VALUES(?,?,?)', id, started, 'running');
+  running.set(key, { workspace, host });
   bus.emit('source', { id, status: 'running' });
   try {
     const items = await fetchSource(source);
-    const fresh = ingest(source, items);
+    const currentSource = q.get('SELECT enabled, cadence_min, created_at FROM sources WHERE id = ?', id);
+    if (!currentSource?.enabled || currentSource.created_at !== source.created_at) {
+      q.run('UPDATE runs SET finished_at=?, status=? WHERE id=?', nowIso(), 'skipped', run.lastInsertRowid);
+      return { skipped: true };
+    }
     const jitter = 1 + (Math.random() * 0.2 - 0.1);
-    const next = new Date(Date.now() + source.cadence_min * 60000 * jitter).toISOString();
-    q.run(`UPDATE sources SET last_run_at=?, next_run_at=?, last_status='ok', last_error=NULL, runs=runs+1, items_total=items_total+? WHERE id=?`, nowIso(), next, fresh, id);
-    q.run('UPDATE runs SET finished_at=?, status=?, fetched=?, new_items=? WHERE id=?', nowIso(), 'ok', items.length, fresh, run.lastInsertRowid);
+    const next = new Date(Date.now() + currentSource.cadence_min * 60000 * jitter).toISOString();
+    const fresh = tx(() => {
+      const added = ingest(source, items);
+      q.run(`UPDATE sources SET last_run_at=?, next_run_at=?, last_status='ok', last_error=NULL, runs=runs+1, items_total=items_total+? WHERE id=?`, nowIso(), next, added, id);
+      q.run('UPDATE runs SET finished_at=?, status=?, fetched=?, new_items=? WHERE id=?', nowIso(), 'ok', items.length, added, run.lastInsertRowid);
+      return added;
+    });
     log('fetch', `${source.name}: ${items.length} items, ${fresh} new${manual ? ' (manual)' : ''}`);
     bus.emit('source', { id, status: 'ok', fresh });
     return { fetched: items.length, fresh };
@@ -84,14 +100,11 @@ export async function runSource(id, { manual = false } = {}) {
     bus.emit('source', { id, status: 'error' });
     return { error: e.message };
   } finally {
-    running.delete(id);
+    running.delete(key);
   }
 }
 
-// One source per host at a time, so a slow-paced host (Reddit) never hogs the worker slots.
-const busyHosts = new Map(); // sourceId -> host
-function hostOf(s) {
-  const p = J(s.params, {});
+function hostOf(s, p) {
   if (s.kind === 'gnews') return 'news.google.com';
   if (s.kind === 'reddit') return 'reddit';
   if (s.kind === 'reader') return 'r.jina.ai';
@@ -101,31 +114,25 @@ function hostOf(s) {
   try { return new URL(p.url).host; } catch { return s.id; }
 }
 
-function tick() {
-  if (running.size >= MAX_CONCURRENT) return;
-  const due = q.all(`SELECT id, kind, params FROM sources WHERE enabled = 1 AND (next_run_at IS NULL OR next_run_at <= ?) ORDER BY next_run_at IS NOT NULL, next_run_at LIMIT 50`, nowIso());
-  const hosts = new Set(busyHosts.values());
-  for (const s of due) {
-    if (running.size >= MAX_CONCURRENT) break;
-    const host = hostOf(s);
-    if (running.has(s.id) || hosts.has(host)) continue;
-    hosts.add(host);
-    busyHosts.set(s.id, host);
-    runSource(s.id).catch(() => {}).finally(() => busyHosts.delete(s.id));
-  }
+export function tickSources() {
+  const due = q.all(`SELECT id FROM sources WHERE enabled = 1 AND (next_run_at IS NULL OR next_run_at <= ?)
+    AND (? = 0 OR created_by != 'system') ORDER BY next_run_at IS NOT NULL, next_run_at LIMIT 50`, nowIso(), workspaceId() ? 1 : 0);
+  for (const s of due) void runSource(s.id).catch(error => log('error', `Source ${s.id}: ${error.message}`));
 }
 
 export function runAllNow() {
-  q.run('UPDATE sources SET next_run_at = NULL WHERE enabled = 1');
-  tick();
+  q.run(`UPDATE sources SET next_run_at = NULL WHERE enabled = 1 AND created_by != 'system'`);
+  tickSources();
 }
 
-export const runningSources = () => [...running];
+export function runningSources() {
+  const prefix = runKey('');
+  return [...running.keys()].filter(key => key.startsWith(prefix)).map(key => key.slice(prefix.length));
+}
 
 export function startScheduler() {
-  warmDedupCache();
-  tick();
-  timer = setInterval(tick, 10_000);
+  tickSources();
+  timer = setInterval(tickSources, 10_000);
 }
 
 export function stopScheduler() {

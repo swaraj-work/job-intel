@@ -249,9 +249,9 @@ export async function enrichCompany(id) {
 
   const domain = enr.domain && !q.get('SELECT id FROM companies WHERE domain = ? AND id != ?', enr.domain, id) ? enr.domain : c.domain;
 
-  q.run(`UPDATE companies SET enrichment = ?, enriched_at = ?, pitch = ?, email_draft = ?, outreach_subject = ?,
+  q.run(`UPDATE companies SET enrichment = ?, enriched_at = ?, pitch = ?, pitch_subject = ?,
     tech_stack = ?, website = COALESCE(?, website), domain = ?, description = COALESCE(description, ?), updated_at = ? WHERE id = ?`,
-    JSON.stringify(enr), nowIso(), emailDraft.body, emailDraft.body, emailDraft.subject,
+    JSON.stringify(enr), nowIso(), emailDraft.body, emailDraft.subject,
     JSON.stringify(enr.techStack || []), enr.found ? enr.url : null, domain, enr.description || null, nowIso(), id);
 
   log('enrich', `${c.name}: ${enr.found ? `${enr.domain} · Tech: ${enr.techStack.join(', ') || 'modern web'} · Email drafted` : 'website not found'}`);

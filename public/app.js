@@ -73,11 +73,34 @@ window.addEventListener('hashchange', route);
 let jobData = { openings: [], funding: [] };
 let jobLimit = 50;
 let jobRequest = 0;
+const jobFilterIds = ['jobQuery', 'jobView', 'jobHours', 'jobType', 'jobLevel', 'jobStartup'];
+const trackedJobView = () => ['saved', 'applied', 'dismissed'].includes($('#jobView').value);
+let saveJobFiltersTimer;
+let savingJobFilters = Promise.resolve();
+let jobFiltersReady;
+
+function saveJobFilters() {
+  clearTimeout(saveJobFiltersTimer);
+  const body = Object.fromEntries(jobFilterIds.map(id => [id, document.getElementById(id).value]));
+  saveJobFiltersTimer = setTimeout(() => {
+    savingJobFilters = savingJobFilters.then(() => api('/job-preferences', { method: 'PUT', body })).catch(e => toast(e.message));
+  }, 300);
+}
 
 async function loadJobs() {
   const request = ++jobRequest;
   try {
-    const data = await api('/opportunities?hours=' + $('#jobHours').value);
+    jobFiltersReady ||= api('/job-preferences').then(filters => {
+      for (const id of jobFilterIds) {
+        const field = document.getElementById(id);
+        if (typeof filters[id] !== 'string' || document.activeElement === field) continue;
+        if (field instanceof HTMLInputElement || [...field.options].some(option => option.value === filters[id])) {
+          field.value = filters[id];
+        }
+      }
+    }).catch(() => {});
+    await jobFiltersReady;
+    const data = await api('/opportunities?hours=' + (trackedJobView() ? 'tracked' : $('#jobHours').value));
     if (request !== jobRequest) return;
     jobData = data;
     renderJobs();
@@ -89,7 +112,14 @@ async function loadJobs() {
 function renderJobs() {
   const funding = $('#jobType').value === 'funding';
   const level = $('#jobLevel').value;
-  const rows = funding ? jobData.funding : jobData.openings.filter(r => (!level || r.level === level) && (!$('#jobStartup').value || r.startup));
+  const view = $('#jobView').value;
+  const tracked = trackedJobView();
+  const query = $('#jobQuery').value.trim().toLowerCase();
+  const stateFilter = (row) => tracked ? row.status === view : row.status !== 'dismissed';
+  const searchFilter = (row) => !query || [row.title, row.summary, row.company, row.location, row.role].join(' ').toLowerCase().includes(query);
+  const rows = (funding ? jobData.funding : jobData.openings.filter(r => (!level || r.level === level) && (!$('#jobStartup').value || r.startup))).filter(stateFilter).filter(searchFilter);
+  if (view === 'personal' && !funding) rows.sort((a, b) => (b.fit?.score || 0) - (a.fit?.score || 0));
+  $('#jobHoursLabel').hidden = tracked;
   $('#jobLevelLabel').hidden = $('#jobStartupLabel').hidden = funding;
   $('#jobsCount').textContent = rows.length + (rows.length === 1 ? ' result' : ' results');
   const expanded = new Set($$('#jobsList details[open]').map(el => el.dataset.id));
@@ -100,12 +130,33 @@ function renderJobs() {
       <h2><a class="link" href="${esc(safeUrl(r.url))}" target="_blank" rel="noopener noreferrer">${esc(r.title)} ↗</a></h2>
       ${metadata ? '<div class="small">' + metadata + '</div>' : ''}
       ${r.summary && r.summary !== r.title ? `<details data-id="${Number(r.id)}" ${expanded.has(String(r.id)) ? 'open' : ''}><summary>Excerpt</summary><p>` + esc(r.summary) + '</p></details>' : ''}
+      <div class="job-actions">
+        ${view === 'personal' && r.fit?.skills.length ? '<span class="muted small">' + esc(r.fit.skills.join(' · ')) + '</span>' : ''}
+        ${r.status !== 'saved' ? '<button class="btn small" data-job="' + Number(r.id) + '" data-status="saved">Save</button>' : ''}
+        ${!funding && r.status !== 'applied' ? '<button class="btn small" data-job="' + Number(r.id) + '" data-status="applied">Mark applied</button>' : ''}
+        ${r.status !== 'dismissed' ? '<button class="btn small" data-job="' + Number(r.id) + '" data-status="dismissed">Dismiss</button>' : ''}
+        ${r.status ? '<button class="btn small" data-job="' + Number(r.id) + '" data-status="">Clear status</button>' : ''}
+      </div>
       ${r.companyId ? '<div><a class="link small" href="#jobs/' + Number(r.companyId) + '">Company &amp; outreach →</a></div>' : ''}
     </article>`;
   }).join('') || `<div class="panel">No matching ${funding ? 'funding announcements' : 'openings'}. Change the filters or <a href="#sources">check sources</a>.</div>`;
   $('#jobsMore').hidden = rows.length <= jobLimit;
 }
-$('#jobHours').onchange = () => {
+$('#jobsList').addEventListener('click', async (event) => {
+  const button = event.target.closest('button[data-job]');
+  if (!button) return;
+  button.disabled = true;
+  try {
+    await api('/opportunities/' + button.dataset.job, { method: 'PATCH', body: { status: button.dataset.status || null } });
+    await loadJobs();
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+const refreshJobFilters = () => {
+  saveJobFilters();
   jobLimit = 50;
   jobData = { openings: [], funding: [] };
   $('#jobsList').textContent = '';
@@ -113,7 +164,9 @@ $('#jobHours').onchange = () => {
   $('#jobsCount').textContent = 'Loading…';
   loadJobs();
 };
-for (const id of ['#jobType', '#jobLevel', '#jobStartup']) $(id).onchange = () => { jobLimit = 50; renderJobs(); };
+$('#jobHours').onchange = $('#jobView').onchange = refreshJobFilters;
+$('#jobQuery').oninput = () => { saveJobFilters(); jobLimit = 50; renderJobs(); };
+for (const id of ['#jobType', '#jobLevel', '#jobStartup']) $(id).onchange = () => { saveJobFilters(); jobLimit = 50; renderJobs(); };
 $('#jobsMore').onclick = () => { jobLimit += 50; renderJobs(); };
 setInterval(() => { if (state.view === 'jobs' && !document.hidden) loadJobs(); }, 30000);
 
@@ -364,7 +417,8 @@ function renderDrawer(l) {
     toast('Draft copied to clipboard!');
   };
 
-  $('#dMarkSent').onclick = async () => {
+  $('#dMarkSent').onclick = async ({ currentTarget }) => {
+    currentTarget.disabled = true;
     try {
       const subject = $('#dOutreachSubject').value;
       const body = $('#dOutreachBody').value;
@@ -375,6 +429,8 @@ function renderDrawer(l) {
       renderDrawer(fresh);
     } catch (err) {
       toast(err.message);
+    } finally {
+      currentTarget.disabled = false;
     }
   };
 
@@ -663,7 +719,7 @@ async function loadSources() {
         <div class="small muted">${s.cadence_min >= 60 ? `${Math.round(s.cadence_min / 6) / 10}h` : `${s.cadence_min}m`}</div>
         <div class="small">${s.items_total}</div>
         <div style="display:flex;gap:6px;justify-content:flex-end;align-items:center">
-          <button class="btn small" data-run="${esc(s.id)}" ${s.enabled ? '' : 'disabled'}>Run</button>
+          ${s.created_by === 'system' ? '' : `<button class="btn small" data-run="${esc(s.id)}" ${s.enabled ? '' : 'disabled'}>Run</button>`}
           ${s.created_by !== 'system' ? `<button class="btn small danger" data-del="${esc(s.id)}" title="Delete">✕</button>` : ''}
           <button class="toggle ${s.enabled ? 'on' : ''}" data-toggle="${esc(s.id)}" data-en="${s.enabled}" title="Enable/disable"><i></i></button>
         </div></div>`;
@@ -852,9 +908,16 @@ if (!new URLSearchParams(location.search).has('static')) {
   setInterval(loadStats, 20000);
 }
 
-fetch('/api/health').then((r) => r.json()).then((h) => {
-  if (!h.auth) return;
-  const b = $('#logoutBtn');
-  b.hidden = false;
-  b.onclick = async () => { await fetch('/auth/logout', { method: 'POST' }); location.href = '/login'; };
+api('/me').then(account => {
+  $('#accountEmail').textContent = 'Signed in as ' + account.email;
+  $('#logoutBtn').title = account.email;
 }).catch(() => {});
+$('#logoutBtn').onclick = async () => {
+  try {
+    const response = await fetch('/auth/logout', { method: 'POST' });
+    if (!response.ok) throw new Error('Sign-out failed. Try again.');
+    location.replace('/login');
+  } catch (error) {
+    toast(error.message);
+  }
+};

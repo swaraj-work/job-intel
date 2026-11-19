@@ -3,6 +3,7 @@ import { getConfig } from '../config.js';
 import { domainOf } from '../util/text.js';
 import { saveTeam } from './people.js';
 import { log } from '../bus.js';
+import { claimServiceCall } from '../util/limits.js';
 import { configured as sproutsConfigured, findLinkedIn, revealEmail } from './sprouts.js';
 
 // Verified work-email lookup through licensed providers. Only verified (or accept-all, marked "risky")
@@ -106,6 +107,7 @@ export async function findEmail(contactId) {
   if (ct.do_not_contact) throw new Error('This person is on the do-not-contact list');
   const c = q.get('SELECT * FROM companies WHERE id = ?', ct.company_id);
   const provider = pickProvider();
+  if (provider !== 'sprouts') claimServiceCall('email', 25);
   const parts = ct.name.split(/\s+/);
   const args = { first: parts[0], last: parts[parts.length - 1], name: ct.name, company: c.name, domain: c.domain || domainOf(c.website) || J(c.enrichment, {})?.domain };
   const r = provider === 'sprouts' ? await sprouts({ ...args, contactId: ct.id, companyId: c.id, linkedin: ct.linkedin })

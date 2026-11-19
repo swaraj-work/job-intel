@@ -4,7 +4,7 @@ import { getSetting, setSetting } from './db.js';
 // Based on the 20-emails/day cold outreach strategy targeting Seed/Pre-Seed startups & fresh hiring posts.
 export const DEFAULT_CONFIG = {
   candidate: {
-    name: 'Alex Kumar',
+    name: '',
     targetRoles: [
       'AI Engineer',
       'Full Stack Developer',
@@ -19,12 +19,12 @@ export const DEFAULT_CONFIG = {
     ],
     experience: '0-2 years / Fresher',
     location: 'Bangalore / Remote',
-    portfolioUrl: 'https://github.com',
-    githubUrl: 'https://github.com',
-    linkedinUrl: 'https://linkedin.com',
+    portfolioUrl: '',
+    githubUrl: '',
+    linkedinUrl: '',
     resumeUrl: '',
     dailyEmailTarget: 20,
-    oneLinerPitch: 'Full-stack engineer who builds fast, scalable web apps and AI tools.'
+    oneLinerPitch: ''
   },
   threshold: 55, // Cut-off for high-probability target in the Daily 20
   dailyQuota: 20, // Daily target of 20 personalized emails
@@ -88,46 +88,38 @@ export const DEFAULT_CONFIG = {
     midTeamMax: 200,           // 51-200: target CTO / VP Engineering / Head of Product
     emailProvider: 'auto',     // auto | sprouts | apollo | hunter
     monthlyLookupCap: 200,     // paid email lookups per month
-    autoFindEmailMinScore: 50, // auto find email for top scoring targets
+    autoFindEmailMinScore: 0, // auto find email for top scoring targets
   },
-  agent: { enabled: true, intervalMinutes: 120, queriesPerCycle: 3, queryTtlDays: 4 },
+  agent: { enabled: false, intervalMinutes: 120, queriesPerCycle: 3, queryTtlDays: 4 },
   maxItemAgeDays: 30,
 };
 
-// Migrate only the previous shipped profile values on an existing volume.
-const stored = getSetting('config', {});
-if (stored.candidate && !getSetting('early_career_profile_v1', false)) {
-  const previousRoles = ['Founding Engineer', 'Full Stack Developer', 'Backend Engineer', 'Frontend Developer', 'Software Engineer', 'AI Engineer'];
-  if (stored.candidate.experience === '2-4 years / Mid-level') stored.candidate.experience = DEFAULT_CONFIG.candidate.experience;
-  if (JSON.stringify(stored.candidate.targetRoles) === JSON.stringify(previousRoles)) stored.candidate.targetRoles = DEFAULT_CONFIG.candidate.targetRoles;
-  setSetting('config', stored);
-  setSetting('early_career_profile_v1', true);
-}
-let cache = null;
-
 export function getConfig() {
-  if (!cache) cache = deepMerge(structuredClone(DEFAULT_CONFIG), getSetting('config', {}));
-  return cache;
+  const cfg = deepMerge(structuredClone(DEFAULT_CONFIG), getSetting('config', {}));
+  cfg.agent.queriesPerCycle = Math.max(1, Math.min(8, Math.floor(cfg.agent.queriesPerCycle)));
+  cfg.enrichment.perCycle = Math.max(1, Math.min(8, Math.floor(cfg.enrichment.perCycle)));
+  cfg.llm.batchSize = Math.max(1, Math.min(20, Math.floor(cfg.llm.batchSize)));
+  return cfg;
 }
 
 export function saveConfig(next) {
   setSetting('config', next);
-  cache = null;
   return getConfig();
 }
 
 export function resetConfig() {
-  setSetting('config', {});
-  cache = null;
-  return getConfig();
+  return saveConfig({});
 }
 
 function deepMerge(base, over) {
-  if (!over || typeof over !== 'object' || Array.isArray(over)) return over ?? base;
+  if (!over || typeof over !== 'object' || Array.isArray(over)) return base;
   for (const [k, v] of Object.entries(over)) {
+    if (!Object.hasOwn(base, k) || k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+    if (v === null || Array.isArray(v) !== Array.isArray(base[k]) || typeof v !== typeof base[k]) continue;
     base[k] = v && typeof v === 'object' && !Array.isArray(v) && base[k] && typeof base[k] === 'object' && !Array.isArray(base[k])
       ? deepMerge(base[k], v)
-      : v;
+      : Array.isArray(v) ? v.filter(item => typeof item === 'string').slice(0, 100).map(item => item.slice(0, 300))
+        : typeof v === 'string' ? v.slice(0, 1000) : v;
   }
   return base;
 }

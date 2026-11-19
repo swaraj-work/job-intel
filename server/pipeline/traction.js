@@ -1,21 +1,13 @@
 // Traction insights from DataForSEO: where a company's web traffic comes from, whether it is growing,
 // what it ranks for and what runs on its site. One lookup costs a few cents, so results are cached.
-import { q, J, nowIso } from '../db.js';
+import { q, J, nowIso, workspaceId } from '../db.js';
 import { bus, log } from '../bus.js';
+import { claimServiceCall } from '../util/limits.js';
 
 const BASE = () => (process.env.DATAFORSEO_BASE || 'https://api.dataforseo.com').replace(/\/$/, '');
 const CACHE_DAYS = 7;
 const DAILY_CAP = () => Number(process.env.DATAFORSEO_DAILY_CAP) || 100;
 export const configured = () => Boolean(process.env.DATAFORSEO_LOGIN && process.env.DATAFORSEO_PASSWORD);
-
-q.run(`CREATE TABLE IF NOT EXISTS traction (
-  company_id INTEGER PRIMARY KEY REFERENCES companies(id) ON DELETE CASCADE,
-  domain TEXT NOT NULL,
-  data TEXT,
-  error TEXT,
-  cost REAL NOT NULL DEFAULT 0,
-  fetched_at TEXT NOT NULL
-)`);
 
 // Google location codes for countries are 2000 + ISO 3166 numeric. The UI turns alpha-2 into a country name.
 const ISO = {
@@ -42,6 +34,7 @@ function auth() {
 class ApiError extends Error {}
 
 async function call(path, body) {
+  claimServiceCall('dataforseo', 25);
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), 45000);
   try {
@@ -172,9 +165,10 @@ export function usageToday() {
 const running = new Map();
 
 export function fetchTraction(companyId, { refresh = false } = {}) {
-  if (running.has(companyId)) return running.get(companyId);
-  const p = run(companyId, refresh).finally(() => running.delete(companyId));
-  running.set(companyId, p);
+  const key = `${workspaceId()}:${companyId}`;
+  if (running.has(key)) return running.get(key);
+  const p = run(companyId, refresh).finally(() => running.delete(key));
+  running.set(key, p);
   return p;
 }
 

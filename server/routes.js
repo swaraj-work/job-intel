@@ -1,19 +1,21 @@
 import { isEnterpriseName } from './pipeline/extract.js';
-import { matchOpening, fundingSignal } from './pipeline/opportunities.js';
+import { matchOpening, fundingSignal, profileMatch } from './pipeline/opportunities.js';
 import express from 'express';
-import { q, J, nowIso, getSetting, setSetting } from './db.js';
+import { q, J, nowIso, getSetting, setSetting, tx } from './db.js';
 import { getConfig, saveConfig, resetConfig, DEFAULT_CONFIG } from './config.js';
 import { computeScore, rescore, rescoreAll } from './pipeline/score.js';
 import { enrichCompany, heuristicPitch } from './pipeline/enrich.js';
 import { fetchSource, SOURCE_KINDS } from './sources/index.js';
 import { runSource, runAllNow, runningSources, ingest } from './scheduler.js';
 import { agentCycle, lookalike } from './agent.js';
-import { stats as procStats, queueDepth } from './pipeline/processor.js';
+import { processorStats, queueDepth } from './pipeline/processor.js';
 import * as llm from './pipeline/llm.js';
 import { REDDIT_SEGMENTS, REDDIT_INTENTS, REDDIT_BANDS, bandOf } from './pipeline/intel.js';
 import { bus, recentActivity, log } from './bus.js';
 import { sha1, fmtUsdM } from './util/text.js';
-import { hostCooldowns } from './util/http.js';
+import { publicUrl } from './util/public-network.js';
+import { rateLimit } from './util/limits.js';
+import { sessionActive } from './auth.js';
 import { targetPlan, contactsOf, saveContacts, suppressContact } from './pipeline/people.js';
 import { findEmail, providerStatus } from './pipeline/email-finders.js';
 import { companySnapshot, cachedSnapshot, findDecisionMakers, findLinkedIn, usage as sproutsUsage, SproutsError } from './pipeline/sprouts.js';
@@ -21,6 +23,17 @@ import { fetchTraction, cachedTraction, usageToday, configured as tractionConfig
 
 export const api = express.Router();
 const wrap = (fn) => (req, res) => Promise.resolve().then(() => fn(req, res)).catch((e) => res.status(400).json({ error: e.message }));
+const actionLimit = (req, res, key, max, ms) => {
+  if (rateLimit(`action:${req.account.id}:${key}`, max, ms)) return true;
+  res.status(429).json({ error: 'Please wait before trying again' });
+  return false;
+};
+
+api.get('/me', (req, res) => {
+  const { name, email } = req.account;
+  res.json({ name, email });
+});
+
 const dayAgoIso = (d = 1) => new Date(Date.now() - d * 86400000).toISOString();
 
 // ---------- shaping ----------
@@ -50,10 +63,10 @@ function companyView(c, events, checkpoint) {
   const enr = J(c.enrichment, null);
   const techStack = J(c.tech_stack, enr?.techStack || []);
   let emailDraft = c.email_draft || c.pitch;
-  let outreachSubject = c.outreach_subject;
-  if (!emailDraft) {
+  let outreachSubject = c.outreach_subject || c.pitch_subject;
+  if (!emailDraft || !outreachSubject) {
     const fallback = heuristicPitch(c, ev, primary);
-    emailDraft = fallback.body;
+    emailDraft ||= fallback.body;
     if (!outreachSubject) outreachSubject = fallback.subject;
   }
   return {
@@ -99,31 +112,67 @@ function eventsFor(ids) {
 // Classify raw publications directly so new listings appear even while enrichment is queued.
 api.get('/opportunities', wrap((req, res) => {
   const undated = req.query.hours === 'undated';
-  const hours = undated ? 168 : Number(req.query.hours || 24);
+  const tracked = req.query.hours === 'tracked';
+  const hours = undated || tracked ? 168 : Number(req.query.hours || 24);
   if (![1, 24, 168].includes(hours)) return res.status(400).json({ error: 'Choose 1, 24 or 168 hours' });
   const now = Date.now();
   const timeColumn = undated ? 'r.fetched_at' : 'r.published_at';
-  const rows = q.all(`SELECT r.id,r.source_id,r.url,r.title,r.summary,r.meta,r.published_at,s.kind,s.params,s.name source,
+  const rows = q.all(`SELECT r.id,r.source_id,r.url,r.title,r.summary,r.meta,r.published_at,s.kind,s.params,s.name source,j.status AS jobStatus,
     (SELECT e.company_id FROM events e WHERE e.raw_item_id=r.id LIMIT 1) companyId
-    FROM raw_items r LEFT JOIN sources s ON s.id=r.source_id
-    WHERE ${undated ? 'r.published_at IS NULL AND' : ''} ${timeColumn} > ? AND ${timeColumn} <= ?
-    ORDER BY ${timeColumn} DESC, r.id DESC`,
-    new Date(now - hours * 3600000).toISOString(), new Date(now).toISOString());
+    FROM raw_items r LEFT JOIN sources s ON s.id=r.source_id LEFT JOIN job_state j ON j.raw_id=r.id
+    WHERE ${tracked ? 'j.status IS NOT NULL' : `COALESCE(s.enabled, 1) = 1 AND ${undated ? 'r.published_at IS NULL AND' : ''} ${timeColumn} > ? AND ${timeColumn} <= ?`}
+    ORDER BY ${timeColumn} DESC, r.id DESC`, ...(tracked ? [] : [
+      new Date(now - hours * 3600000).toISOString(), new Date(now).toISOString(),
+    ]));
   const openings = [], funding = [];
+  const cfg = getConfig();
   for (const r of rows) {
     const meta = J(r.meta, {});
     if (meta.entity || !/^https?:\/\//i.test(r.url)) continue;
     const params = J(r.params, {});
     const item = { ...r, meta };
     const company = meta.job?.company;
-    if (company && (isEnterpriseName(company) || getConfig().blocklist.some(n => n.toLowerCase() === company.toLowerCase()))) continue;
+    if (company && (isEnterpriseName(company, cfg) || cfg.blocklist.some(n => n.toLowerCase() === company.toLowerCase()))) continue;
     const match = matchOpening(item, { id: r.source_id, kind: r.kind, params });
     const card = { id: r.id, title: r.title, url: r.url, published: r.published_at, approximate: !!meta.job?.approximate,
-      summary: (r.summary || '').slice(0, 320), source: meta.job?.publisher || r.source || 'Original publication', companyId: r.companyId };
-    if (!meta.job && ['rss', 'gnews', 'hn', 'reddit'].includes(r.kind) && fundingSignal(r.title)) funding.push(card);
-    else if (match) openings.push({ ...card, ...match });
+      summary: (r.summary || '').slice(0, 320), source: meta.job?.publisher || r.source || 'Original publication', companyId: r.companyId, status: r.jobStatus };
+    if (!meta.job && (['rss', 'gnews', 'hn', 'reddit'].includes(r.kind) || (tracked && !r.kind)) && fundingSignal(r.title)) funding.push(card);
+    else if (match) openings.push({ ...card, ...match, fit: profileMatch(item, match, cfg.candidate) });
+    else if (tracked) openings.push({ ...card, company, level: 'Experience unspecified' });
   }
   res.json({ openings, funding });
+}));
+
+const jobPreferenceValues = {
+  jobView: ['personal', 'all', 'saved', 'applied', 'dismissed'],
+  jobHours: ['1', '24', '168', 'undated'],
+  jobType: ['openings', 'funding'],
+  jobLevel: ['', 'Internship', 'Early career', 'Experience unspecified'],
+  jobStartup: ['', 'startup'],
+};
+api.get('/job-preferences', wrap((req, res) => res.json(getSetting('job_preferences', {}))));
+api.put('/job-preferences', wrap((req, res) => {
+  const preferences = Object.fromEntries(Object.entries(jobPreferenceValues)
+    .filter(([key, allowed]) => allowed.includes(req.body?.[key]))
+    .map(([key]) => [key, req.body[key]]));
+  if (typeof req.body?.jobQuery === 'string') preferences.jobQuery = req.body.jobQuery.slice(0, 120);
+  setSetting('job_preferences', preferences);
+  res.json({ ok: true });
+}));
+
+api.patch('/opportunities/:id', wrap((req, res) => {
+  const id = Number(req.params.id);
+  const { status } = req.body || {};
+  if (![null, 'saved', 'applied', 'dismissed'].includes(status)) {
+    return res.status(400).json({ error: 'Invalid job status' });
+  }
+  if (!Number.isSafeInteger(id) || !q.get('SELECT 1 FROM raw_items WHERE id = ?', id)) {
+    return res.status(404).json({ error: 'Posting not found' });
+  }
+  if (status === null) q.run('DELETE FROM job_state WHERE raw_id = ?', id);
+  else q.run(`INSERT INTO job_state (raw_id, status) VALUES (?, ?)
+    ON CONFLICT (raw_id) DO UPDATE SET status = excluded.status`, id, status);
+  res.json({ ok: true });
 }));
 
 // ---------- stats ----------
@@ -163,9 +212,8 @@ api.get('/stats', wrap((req, res) => {
     running: runningSources(),
     sectors: q.all(`SELECT sector, COUNT(*) n, ROUND(AVG(score)) avg FROM companies WHERE status != 'dismissed' GROUP BY sector ORDER BY n DESC`),
     llm: llm.usage(),
-    pipeline: procStats,
+    pipeline: processorStats(),
     threshold: cfg.threshold,
-    cooldowns: hostCooldowns(),
     briefCheckpoint: getSetting('brief_checkpoint', null),
   });
 }));
@@ -234,8 +282,8 @@ function leadQuery(qs) {
 
 api.get('/leads', wrap((req, res) => {
   const { sql, p, order } = leadQuery(req.query);
-  const limit = Math.min(200, Number(req.query.limit) || 50);
-  const offset = Number(req.query.offset) || 0;
+  const limit = Math.max(1, Math.min(200, Math.floor(Number(req.query.limit) || 50)));
+  const offset = Math.max(0, Math.floor(Number(req.query.offset) || 0));
   const total = q.get(`SELECT COUNT(*) n ${sql}`, ...p).n;
   const rows = q.all(`SELECT c.* ${sql} ORDER BY ${order} LIMIT ? OFFSET ?`, ...p, limit, offset);
   const evs = eventsFor(rows.map((r) => r.id));
@@ -248,7 +296,11 @@ api.get('/leads.csv', wrap((req, res) => {
   const rows = q.all(`SELECT c.* ${sql} ORDER BY ${order} LIMIT 5000`, ...p);
   const evs = eventsFor(rows.map((r) => r.id));
   const cols = ['name', 'score', 'application_status', 'sector', 'city', 'website', 'tech_stack', 'stage', 'amount', 'funding_date', 'team_size', 'contact_name', 'contact_role', 'contact_email', 'email_status', 'reach_out_to', 'why', 'cold_email_subject', 'cold_email_draft', 'source_url', 'sent_at'];
-  const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const esc = (v) => {
+    const value = String(v ?? '');
+    const safe = /^[\s]*[=+@-]|^[\t\r\n]/.test(value) ? "'" + value : value;
+    return `"${safe.replace(/"/g, '""')}"`;
+  };
   const lines = [cols.join(',')];
   for (const c of rows) {
     const v = companyView(c, evs.get(c.id) || []);
@@ -293,9 +345,9 @@ api.post('/leads/:id/contacts', wrap((req, res) => {
   const c = q.get('SELECT * FROM companies WHERE id = ?', req.params.id);
   if (!c) return res.status(404).json({ error: 'Not found' });
   const { name, role, email } = req.body || {};
-  if (!name || String(name).trim().split(/\s+/).length < 2) throw new Error('Full name (first and last) is required');
-  if (email && !EMAIL_RE.test(email)) throw new Error('That email address does not look valid');
-  const added = saveContacts(c.id, [{ name, role, evidence: 'Added manually' }], { source: 'manual', confidence: 1 });
+  if (typeof name !== 'string' || name.trim().split(/\s+/).length < 2) throw new Error('Full name (first and last) is required');
+  if (email && (typeof email !== 'string' || !EMAIL_RE.test(email.trim()))) throw new Error('That email address does not look valid');
+  const added = saveContacts(c.id, [{ name, role: typeof role === 'string' ? role : null, evidence: 'Added manually' }], { source: 'manual', confidence: 1 });
   if (!added) throw new Error('This person is already listed (or was removed and suppressed)');
   const ct = q.get('SELECT id FROM contacts WHERE company_id = ? ORDER BY id DESC LIMIT 1', c.id);
   if (email) q.run(`UPDATE contacts SET email = ?, email_status = 'manual', email_source = 'manual', email_checked_at = ? WHERE id = ?`, email.trim(), nowIso(), ct.id);
@@ -315,8 +367,11 @@ api.patch('/contacts/:id', wrap((req, res) => {
 api.delete('/contacts/:id', wrap((req, res) => {
   const ct = q.get('SELECT * FROM contacts WHERE id = ?', req.params.id);
   if (!ct) return res.status(404).json({ error: 'Not found' });
-  suppressContact(ct.company_id, ct.norm_name);
-  q.run('DELETE FROM contacts WHERE id = ?', ct.id);
+  tx(() => {
+    suppressContact(ct.company_id, ct.norm_name);
+    q.run('UPDATE outreach_log SET contact_id = NULL WHERE contact_id = ?', ct.id);
+    q.run('DELETE FROM contacts WHERE id = ?', ct.id);
+  });
   log('people', `Removed and suppressed a contact at company #${ct.company_id}`);
   res.json({ ok: true });
 }));
@@ -350,13 +405,21 @@ api.post('/leads/:id/mark-sent', wrap((req, res) => {
   const contacts = contactsOf(c.id);
   const plan = targetPlan(c, contacts);
   const primary = contacts.find((x) => x.id === plan.primaryId) || contacts[0];
-  const subject = req.body?.subject || c.outreach_subject;
-  const body = req.body?.body || c.email_draft || c.pitch;
+  const subject = cleanText(req.body?.subject, 500) || c.outreach_subject || c.pitch_subject;
+  const body = cleanText(req.body?.body, 10_000) || c.email_draft || c.pitch;
+  if (c.application_status === 'sent') {
+    const recent = q.get(`SELECT sent_at FROM outreach_log WHERE company_id = ? AND subject IS ? AND body IS ?
+      AND recipient_email IS ? AND sent_at >= ? ORDER BY sent_at DESC LIMIT 1`,
+    c.id, subject, body, primary?.email || null, new Date(Date.now() - 60_000).toISOString());
+    if (recent) return res.json({ ok: true, sentAt: recent.sent_at });
+  }
   const now = nowIso();
 
-  q.run(`UPDATE companies SET application_status = 'sent', sent_at = ?, updated_at = ? WHERE id = ?`, now, now, c.id);
-  q.run(`INSERT INTO outreach_log(company_id, contact_id, status, subject, body, recipient_email, sent_at) VALUES(?,?,?,?,?,?,?)`,
-    c.id, primary?.id || null, 'sent', subject, body, primary?.email || null, now);
+  tx(() => {
+    q.run(`UPDATE companies SET application_status = 'sent', sent_at = ?, updated_at = ? WHERE id = ?`, now, now, c.id);
+    q.run(`INSERT INTO outreach_log(company_id, contact_id, status, subject, body, recipient_email, sent_at) VALUES(?,?,?,?,?,?,?)`,
+      c.id, primary?.id || null, 'sent', subject, body, primary?.email || null, now);
+  });
 
   log('outreach', `Cold email marked sent to ${c.name} (${primary?.name || 'Founder'})`);
   bus.emit('outreach', { id: c.id, name: c.name, status: 'sent' });
@@ -387,8 +450,9 @@ api.get('/candidate', wrap((req, res) => {
 api.put('/candidate', wrap((req, res) => {
   const cfg = getConfig();
   const next = { ...cfg, candidate: { ...cfg.candidate, ...(req.body || {}) } };
-  saveConfig(next);
-  res.json({ ok: true, candidate: next.candidate });
+  const updated = saveConfig(next);
+  rescoreAll();
+  res.json({ ok: true, candidate: updated.candidate });
 }));
 
 // Bounded learning: feedback nudges sector weight (±25% max) and source quality counters.
@@ -512,16 +576,23 @@ api.get('/sources', wrap((req, res) => {
   res.json(rows.map((s) => ({ ...s, params: J(s.params, {}), running: running.has(s.id), quality: s.approved + s.rejected ? Math.round((s.approved / (s.approved + s.rejected)) * 100) : null })));
 }));
 
+function cleanText(value, max) {
+  return typeof value === 'string' ? value.trim().slice(0, max) : '';
+}
+
 function sourceFromBody(b) {
   const kind = b.kind;
+  b = { ...b, name: cleanText(b.name, 120), query: cleanText(b.query, 300),
+    search: cleanText(b.search, 300), sub: cleanText(b.sub, 24), board: cleanText(b.board, 80) };
+  if (b.sub && !/^[a-z0-9_]+$/i.test(b.sub)) throw new Error('Invalid subreddit name');
   if (!SOURCE_KINDS.includes(kind)) throw new Error(`kind must be one of ${SOURCE_KINDS.join(', ')}`);
   const category = ['leads', 'intel', 'voice'].includes(b.category) ? b.category : kind === 'reddit' ? 'voice' : 'leads';
   let params, name;
   if (kind === 'ashby') {
-    if (!/^[a-z0-9_-]+$/i.test(b.board || '')) throw new Error('Enter an Ashby board name');
+    if (!/^[a-z0-9_-]{1,80}$/i.test(b.board || '')) throw new Error('Enter an Ashby board name');
     params = { board: b.board, company: b.name || b.board }; name = params.company;
   }
-  else if (kind === 'rss' || kind === 'reader') { if (!/^https?:\/\//.test(b.url || '')) throw new Error('A valid feed URL is required'); params = { url: b.url }; name = b.name || new URL(b.url).hostname; }
+  else if (kind === 'rss' || kind === 'reader') { const url = publicUrl(cleanText(b.url, 2000)); params = { url: url.href }; name = b.name || url.hostname; }
   else if (kind === 'gnews') { if (!b.query) throw new Error('query is required'); params = { query: b.query }; name = b.name || `GNews: ${b.query}`; }
   else if (kind === 'reddit') { if (!b.sub && !b.search) throw new Error('sub or search is required'); params = { sub: b.sub || undefined, search: b.search || undefined }; name = b.name || (b.sub ? `Reddit r/${b.sub}` : `Reddit: ${b.search}`); }
   else if (kind === 'hn') { if (!b.query) throw new Error('query is required'); params = { query: b.query, days: 45 }; name = b.name || `HN: ${b.query}`; }
@@ -530,19 +601,27 @@ function sourceFromBody(b) {
 }
 
 api.post('/sources/test', wrap(async (req, res) => {
+  if (!actionLimit(req, res, 'source-test', 5, 60_000)) return;
   const s = sourceFromBody(req.body || {});
   const items = await fetchSource(s);
   res.json({ ok: true, count: items.length, sample: items.slice(0, 5).map((i) => ({ title: i.title, date: i.published_at })) });
 }));
 
 api.post('/sources', wrap(async (req, res) => {
+  if (!actionLimit(req, res, 'source-add', 5, 60_000)) return;
   const s = sourceFromBody(req.body || {});
   if (q.get('SELECT 1 FROM sources WHERE id = ?', s.id)) throw new Error('This source already exists');
-  const items = await fetchSource(s); // validates before saving
-  const cadence = Math.max(5, Number(req.body.cadence_min) || (['reader', 'ashby', 'reddit'].includes(s.kind) ? 15 : 120));
-  q.run('INSERT INTO sources(id, name, kind, category, params, cadence_min, created_by) VALUES(?,?,?,?,?,?,?)', s.id, s.name, s.kind, s.category, JSON.stringify(s.params), cadence, 'user');
-  const fresh = ingest({ ...s }, items);
-  q.run('UPDATE sources SET last_run_at = ?, next_run_at = ?, last_status = ?, runs = 1, items_total = ? WHERE id = ?', nowIso(), new Date(Date.now() + cadence * 60000).toISOString(), 'ok', fresh, s.id);
+  const count = () => q.get("SELECT COUNT(*) AS n FROM sources WHERE created_by = 'user'").n;
+  if (count() >= 20) return res.status(400).json({ error: 'Each account can have up to 20 custom sources' });
+  const items = await fetchSource(s);
+  if (count() >= 20) return res.status(400).json({ error: 'Each account can have up to 20 custom sources' });
+  const cadence = Math.min(1440, Math.max(15, Number(req.body.cadence_min) || (['reader', 'ashby', 'reddit'].includes(s.kind) ? 15 : 120)));
+  const fresh = tx(() => {
+    q.run('INSERT INTO sources(id, name, kind, category, params, cadence_min, created_by) VALUES(?,?,?,?,?,?,?)', s.id, s.name, s.kind, s.category, JSON.stringify(s.params), cadence, 'user');
+    const added = ingest(s, items);
+    q.run('UPDATE sources SET last_run_at = ?, next_run_at = ?, last_status = ?, runs = 1, items_total = ? WHERE id = ?', nowIso(), new Date(Date.now() + cadence * 60000).toISOString(), 'ok', added, s.id);
+    return added;
+  });
   log('source', `Added ${s.name}: ${items.length} items, ${fresh} new`);
   res.json({ ok: true, id: s.id, fetched: items.length, fresh });
 }));
@@ -552,7 +631,7 @@ api.patch('/sources/:id', wrap((req, res) => {
   if (!s) return res.status(404).json({ error: 'Not found' });
   const b = req.body || {};
   if (typeof b.enabled === 'boolean') q.run('UPDATE sources SET enabled = ?, next_run_at = CASE WHEN ? THEN NULL ELSE next_run_at END, expires_at = CASE WHEN ? AND created_by = \'agent\' THEN NULL ELSE expires_at END WHERE id = ?', b.enabled ? 1 : 0, b.enabled ? 1 : 0, b.enabled ? 1 : 0, s.id);
-  if (b.cadence_min) q.run('UPDATE sources SET cadence_min = ? WHERE id = ?', Math.max(5, Number(b.cadence_min)), s.id);
+  if (s.created_by !== 'system' && Number.isFinite(Number(b.cadence_min)) && Number(b.cadence_min) > 0) q.run('UPDATE sources SET cadence_min = ? WHERE id = ?', Math.min(1440, Math.max(15, Number(b.cadence_min))), s.id);
   if (b.category && ['leads', 'intel', 'voice'].includes(b.category)) q.run('UPDATE sources SET category = ? WHERE id = ?', b.category, s.id);
   res.json({ ok: true });
 }));
@@ -566,16 +645,19 @@ api.delete('/sources/:id', wrap((req, res) => {
 }));
 
 api.post('/sources/:id/run', wrap(async (req, res) => {
+  if (!actionLimit(req, res, 'run-source', 6, 60_000)) return;
   res.json(await runSource(req.params.id, { manual: true }));
 }));
 
 api.post('/scan', wrap((req, res) => {
+  if (!actionLimit(req, res, 'scan', 1, 60_000)) return;
   runAllNow();
   log('scan', 'Manual scan of all enabled sources triggered');
   res.json({ ok: true });
 }));
 
 api.post('/agent/run', wrap(async (req, res) => {
+  if (!actionLimit(req, res, 'agent', 1, 15 * 60_000)) return;
   const ids = await agentCycle({ force: true });
   res.json({ ok: true, added: ids || [] });
 }));
@@ -602,7 +684,7 @@ api.post('/config/reset', wrap((req, res) => {
 // Live preview: how would the current top leads score under a draft config?
 api.post('/config/preview', wrap((req, res) => {
   const draft = req.body?.config;
-  if (!draft) throw new Error('config required');
+  if (!draft || typeof draft !== 'object' || Array.isArray(draft)) throw new Error('config required');
   const rows = q.all(`SELECT * FROM companies WHERE status != 'dismissed' ORDER BY score DESC LIMIT 40`);
   const evs = eventsFor(rows.map((r) => r.id));
   const out = rows.map((c) => {
@@ -617,18 +699,33 @@ api.get('/activity', wrap((req, res) => res.json(recentActivity(Number(req.query
 
 api.get('/runs', wrap((req, res) => res.json(q.all('SELECT r.*, s.name FROM runs r LEFT JOIN sources s ON s.id = r.source_id ORDER BY r.id DESC LIMIT 100'))));
 
+const openStreams = new Map();
 api.get('/stream', (req, res) => {
+  const id = req.account.id;
+  const count = openStreams.get(id) || 0;
+  if (count >= 6) return res.status(429).json({ error: 'Too many open tabs' });
+  openStreams.set(id, count + 1);
+  res.once('close', () => {
+    const remaining = openStreams.get(id) - 1;
+    if (remaining) openStreams.set(id, remaining);
+    else openStreams.delete(id);
+  });
   res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive', 'x-accel-buffering': 'no' });
   res.write('retry: 3000\n\n');
-  const send = (event) => (data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data ?? {})}\n\n`);
+  const send = event => data => {
+    if (!res.write(`event: ${event}\ndata: ${JSON.stringify(data ?? {})}\n\n`)) res.end();
+  };
   const handlers = { activity: send('activity'), lead: send('lead'), intel: send('intel'), source: send('source'), stats: send('stats'), traction: send('traction') };
-  for (const [k, h] of Object.entries(handlers)) bus.on(k, h);
-  const ping = setInterval(() => res.write(': ping\n\n'), 25000);
-  req.on('close', () => {
+  const subscriptions = Object.entries(handlers).map(([event, handler]) => bus.on(event, (data) => {
+    if (sessionActive(req.account.token_hash)) handler(data);
+    else res.end();
+  }));
+  const ping = setInterval(() => {
+    if (sessionActive(req.account.token_hash)) res.write(': ping\n\n');
+    else res.end();
+  }, 25000);
+  res.once('close', () => {
     clearInterval(ping);
-    for (const [k, h] of Object.entries(handlers)) bus.off(k, h);
+    subscriptions.forEach(unsubscribe => unsubscribe());
   });
 });
-
-// Unauthenticated (platform healthcheck), so expose nothing sensitive.
-api.get('/health', (req, res) => { q.get('SELECT 1'); res.json({ ok: true, auth: true, time: nowIso() }); });
