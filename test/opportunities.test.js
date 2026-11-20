@@ -108,3 +108,28 @@ test('inbox includes postings by source date, keeps independent roles, and links
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('outreach templates use the selected signal and candidate details', async () => {
+  const { outreachDraft } = await import('../server/pipeline/outreach.js');
+  const company = { name: 'Example Labs' };
+  const events = [
+    { type: 'hiring', title: 'Backend internship' },
+    { type: 'funding', stage: 'Seed', amount_text: '$2M' },
+  ];
+  const profile = {
+    name: 'Candidate',
+    targetRoles: ['Backend Engineer'],
+    oneLinerPitch: 'I build tools for local businesses.',
+    portfolioUrl: 'https://example.test/portfolio',
+  };
+  const contact = { name: 'Jamie Sharma' };
+  const suggested = outreachDraft(company, events, profile, contact);
+  assert.deepEqual(suggested, outreachDraft(company, events, profile, contact, 'hiring'));
+  assert.match(suggested.body, /Hi Jamie,/);
+  assert.match(suggested.body, /Backend internship/);
+  assert.match(suggested.body, /I build tools for local businesses/);
+  const funding = outreachDraft(company, events, profile, contact, 'funding');
+  assert.match(funding.body, /Seed round \(\$2M\)/);
+  assert.match(funding.body, /https:\/\/example.test\/portfolio/);
+  assert.doesNotMatch(funding.body, /Backend internship/);
+});

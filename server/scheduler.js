@@ -1,4 +1,4 @@
-import { q, J, nowIso, workspaceId, tx } from './db.js';
+import { q, J, nowIso, workspaceId, tx, workspaceExists } from './db.js';
 import { fetchSource } from './sources/index.js';
 import { canonicalUrl, sha1, tokens, jaccard, daysAgo } from './util/text.js';
 import { getConfig } from './config.js';
@@ -84,6 +84,7 @@ export async function runSource(id, { manual = false } = {}) {
     bus.emit('source', { id, status: 'ok', fresh });
     return { fetched: items.length, fresh };
   } catch (e) {
+    if (workspace && !workspaceExists(workspace)) return { skipped: true };
     if (e.status === 429 || e.status === 503) {
       // Rate limited: not a failure, just come back later.
       const later = new Date(Date.now() + (15 + Math.random() * 20) * 60000).toISOString();

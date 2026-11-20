@@ -1,10 +1,11 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { createAuth, currentSession } from './auth.js';
-import { db, inWorkspace } from './db.js';
+import { createAuth, currentSession, clearAccountCookies } from './auth.js';
+import { db, inWorkspace, purgeWorkspace, tx, inCatalog } from './db.js';
 import { api } from './routes.js';
-import { activateWorkspace } from './workspaces.js';
+import { activateWorkspace, deactivateWorkspace } from './workspaces.js';
+import { createGmail } from './gmail.js';
 import { rateLimit } from './util/limits.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -21,7 +22,7 @@ export function appOrigin(value, port, hosted) {
   return url.origin;
 }
 
-export function createApp({ origin, clientId, clientSecret, googleClient }) {
+export function createApp({ origin, clientId, clientSecret, googleClient, gmail = {} }) {
   const app = express();
   const secure = new URL(origin).protocol === 'https:';
   app.disable('x-powered-by');
@@ -70,11 +71,43 @@ export function createApp({ origin, clientId, clientSecret, googleClient }) {
     }
     req.account = account;
     return inWorkspace(account.id, () => {
-      if (req.path.startsWith('/api') || req.path === '/') activateWorkspace(account);
+      const deletingAccount = req.method === 'DELETE' && req.path === '/api/account';
+      if (!deletingAccount && (req.path.startsWith('/api') || req.path === '/')) activateWorkspace(account);
       next();
     });
   });
 
+  const mail = createGmail({
+    origin,
+    clientId: process.env.GMAIL_CLIENT_ID,
+    clientSecret: process.env.GMAIL_CLIENT_SECRET,
+    encryptionKey: process.env.GMAIL_TOKEN_KEY,
+    ...gmail,
+  });
+  app.use('/api/gmail', mail.router);
+  app.delete('/api/account', async (req, res) => {
+    if (req.body?.confirmation !== 'DELETE') {
+      return res.status(400).json({ error: 'Type DELETE to confirm account deletion.' });
+    }
+
+    const { id } = req.account;
+    let revokeMail;
+    try {
+      revokeMail = mail.prepareRevocation();
+    } catch {
+      // A damaged or unreadable workspace can still be deleted.
+    }
+    inCatalog(() => tx(() => {
+      db.prepare('INSERT INTO pending_workspace_deletions (id) VALUES (?)').run(id);
+      // Foreign keys cascade to sessions and pending Gmail authorizations.
+      db.prepare('DELETE FROM users WHERE id = ?').run(id);
+    }));
+    const purged = purgeWorkspace(id);
+    deactivateWorkspace(id);
+    clearAccountCookies(req, res, secure);
+    const gmailRevoked = revokeMail ? await revokeMail() : false;
+    res.status(purged ? 200 : 202).json({ workspaceCleanupPending: !purged, gmailRevoked });
+  });
   app.use('/api', api);
   app.use(express.static(publicDir, { extensions: ['html'], cacheControl: false }));
   app.use((error, req, res, next) => {

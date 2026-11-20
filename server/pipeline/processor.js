@@ -1,4 +1,4 @@
-import { q, J, nowIso, workspaceId } from '../db.js';
+import { q, J, nowIso, workspaceId, workspaceExists } from '../db.js';
 import { getConfig } from '../config.js';
 import { prefilter } from './prefilter.js';
 import { saveIntel } from './intel-store.js';
@@ -87,6 +87,7 @@ export async function processBatch() {
     log('process', `Processed ${batch.length} items via ${v}: ${touched.size} companies touched`);
     bus.emit('stats');
   } catch (e) {
+    if (id && !workspaceExists(id)) return;
     log('error', `Processor: ${e.message}`);
     q.run(`UPDATE raw_items SET status='new' WHERE status='processing'`);
   } finally {

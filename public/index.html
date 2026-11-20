@@ -22,6 +22,7 @@
     <a href="#jobs" data-view="jobs">Latest jobs</a>
     <a href="#brief" data-view="brief">Shortlist</a>
     <a href="#leads" data-view="leads">Applications</a>
+    <a href="#gmail" data-view="gmail">Gmail</a>
     <a href="#sources" data-view="sources">Sources</a>
     <a href="#config" data-view="config">Profile</a>
   </nav>
@@ -92,6 +93,25 @@
     </section>
     <div class="table" id="leadTable"></div>
     <div class="pager"><button class="btn small" id="moreBtn" hidden>Load more</button></div>
+  </section>
+
+  <section class="view" id="view-gmail" hidden>
+    <div class="hero">
+      <h1>Gmail inbox</h1>
+      <div class="hero-actions">
+        <button class="btn" id="gmailConnect" hidden>Connect Gmail</button>
+        <button class="btn" id="gmailDisconnect" hidden>Disconnect</button>
+      </div>
+    </div>
+    <p class="muted" id="gmailStatus" role="status"></p>
+    <div id="gmailInbox" hidden>
+      <div class="hero-actions">
+        <button class="btn" id="gmailRefresh">Refresh</button>
+        <a class="btn" id="gmailDrafts" target="_blank" rel="noopener">Open Gmail drafts</a>
+      </div>
+      <div id="gmailMessages"></div>
+      <button class="btn" id="gmailMore" hidden>Load more</button>
+    </div>
   </section>
 
   <!-- REDDIT HIRING -->
@@ -226,8 +246,27 @@
     <div class="panel" id="previewPanel" hidden><div class="panel-head"><h3>Impact preview</h3><span class="muted small" id="previewSummary"></span></div><div id="previewTable"></div></div>
     <details class="panel raw"><summary>Advanced: raw JSON config</summary><textarea id="cfgRaw" spellcheck="false"></textarea><div class="row-end"><button class="btn small" id="cfgRawApply">Apply JSON</button></div></details>
     </details>
+
+    <div class="panel account-settings">
+      <div class="panel-head"><h3>JobIntel account</h3></div>
+      <button class="btn danger" type="button" id="openDeleteAccount">Delete account</button>
+    </div>
   </section>
 </main>
+
+<dialog class="panel account-dialog" id="deleteAccountDialog" aria-labelledby="deleteAccountTitle" aria-describedby="deleteAccountDescription">
+  <form id="deleteAccountForm">
+    <h2 id="deleteAccountTitle">Delete your JobIntel account?</h2>
+    <p id="deleteAccountDescription">This permanently deletes your workspace, including your profile, saved jobs, applications, custom sources, and outreach history. You’ll be signed out on all devices.</p>
+    <label for="deleteAccountConfirmation">Type <strong>DELETE</strong> to confirm</label>
+    <input class="input" id="deleteAccountConfirmation" maxlength="6" required autocomplete="off" spellcheck="false" autofocus>
+    <p id="deleteAccountStatus" role="status" hidden></p>
+    <div class="row-end">
+      <button class="btn" type="button" id="cancelDeleteAccount">Cancel</button>
+      <button class="btn danger" type="submit" id="confirmDeleteAccount" disabled>Delete account</button>
+    </div>
+  </form>
+</dialog>
 
 <div class="drawer-wrap" id="drawerWrap"><aside class="drawer" id="drawer"></aside></div>
 <div class="toast" id="toast"></div>

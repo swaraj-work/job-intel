@@ -4,9 +4,13 @@ const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
 const safeUrl = (u) => (/^https?:\/\//i.test(u || '') ? u : '#');
 
+let accountDeletionPending = false;
 async function api(path, opts = {}) {
   const res = await fetch(`/api${path}`, { headers: { 'content-type': 'application/json' }, ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined });
-  if (res.status === 401) { location.href = '/login'; throw new Error('Signed out'); }
+  if (res.status === 401) {
+    if (!accountDeletionPending || path === '/account') location.href = '/login';
+    throw new Error('Signed out');
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
@@ -40,7 +44,7 @@ const avatar = (l) => `<div class="avatar">${l.logo ? `<img src="${esc(safeUrl(l
 const state = { view: 'jobs', threshold: 60, stats: null, leadsOffset: 0, config: null, pendingLeads: 0 };
 
 // ---------- routing ----------
-const VIEWS = ['jobs', 'brief', 'leads', 'reddit', 'live', 'sources', 'config'];
+const VIEWS = ['jobs', 'brief', 'leads', 'gmail', 'reddit', 'live', 'sources', 'config'];
 function route() {
   const [v, id] = location.hash.slice(1).split('/');
   const view = VIEWS.includes(v) ? v : 'jobs';
@@ -61,6 +65,7 @@ function route() {
     brief: loadBrief,
     leads: () => loadLeads(true),
     reddit: loadReddit,
+    gmail: loadGmail,
     live: loadLive,
     sources: loadSources,
     config: loadConfig
@@ -69,6 +74,130 @@ function route() {
   if (id) openLead(id);
 }
 window.addEventListener('hashchange', route);
+
+let gmailConnection;
+let inboxVersion = 0;
+let nextMailPage;
+const gmailStatus = (text) => { $('#gmailStatus').textContent = text; };
+const gmailLink = (email, section) => 'https://mail.google.com/mail/?authuser=' + encodeURIComponent(email) + '#' + section;
+
+async function loadGmail() {
+  const version = ++inboxVersion;
+  const params = new URLSearchParams(location.search);
+  const result = params.get('gmail');
+  const messages = {
+    connected: 'Gmail connected.',
+    denied: 'Gmail access was declined.',
+    permissions: 'Gmail needs permission to read mail and manage drafts. Connect again and grant both permissions.',
+    account: 'Choose the Google account you used to sign in to JobIntel.',
+    failed: 'The Gmail connection could not be completed. Try connecting again.',
+  };
+  if (result) {
+    params.delete('gmail');
+    history.replaceState(null, '', location.pathname + (params.size ? '?' + params : '') + location.hash);
+    if (Object.hasOwn(messages, result)) toast(messages[result]);
+  }
+  $('#gmailInbox').hidden = true;
+  $('#gmailConnect').hidden = true;
+  $('#gmailDisconnect').hidden = true;
+  $('#gmailMessages').replaceChildren();
+  gmailStatus('Checking Gmail connection…');
+  try {
+    const connection = await api('/gmail');
+    if (version !== inboxVersion) return;
+    gmailConnection = connection;
+    $('#gmailConnect').hidden = !connection.enabled;
+    $('#gmailConnect').textContent = connection.email ? 'Reconnect' : 'Connect Gmail';
+    $('#gmailDisconnect').hidden = !connection.email;
+    if (!connection.enabled) return gmailStatus('Gmail is unavailable on this deployment.');
+    if (!connection.email) return gmailStatus('Connect your signed-in Google account to read mail and save outreach drafts.');
+    $('#gmailDrafts').href = gmailLink(connection.email, 'drafts');
+    $('#gmailInbox').hidden = false;
+    await loadGmailPage();
+  } catch (error) {
+    if (version === inboxVersion) gmailStatus(error.message);
+  }
+}
+
+async function loadGmailPage(page) {
+  const version = ++inboxVersion;
+  const list = $('#gmailMessages');
+  const more = $('#gmailMore');
+  if (!page) list.replaceChildren();
+  more.hidden = true;
+  gmailStatus('Loading mail…');
+  try {
+    const data = await api('/gmail/inbox' + (page ? '?page=' + encodeURIComponent(page) : ''));
+    if (version !== inboxVersion) return;
+    nextMailPage = data.nextPage;
+    for (const message of data.messages) {
+      const item = document.createElement('details');
+      item.className = 'panel gmail-message';
+      item.innerHTML = `<summary><b>${esc(message.subject || '(No subject)')}</b>
+        <span class="muted small">${esc(message.from)} · ${esc(message.date)}</span></summary>
+        <div class="gmail-content"></div>`;
+      const content = $('.gmail-content', item);
+      let loaded = false;
+      item.addEventListener('toggle', async () => {
+        if (!item.open || loaded) return;
+        loaded = true;
+        content.textContent = 'Loading message…';
+        try {
+          const detail = await api('/gmail/messages/' + encodeURIComponent(message.id));
+          if (!item.isConnected) return;
+          const text = document.createElement('p');
+          text.className = 'gmail-body';
+          text.textContent = detail.text || detail.snippet || 'Open in Gmail to read this message.';
+          const link = document.createElement('a');
+          link.className = 'link';
+          link.textContent = 'Open in Gmail';
+          link.href = gmailLink(gmailConnection.email, 'all/' + encodeURIComponent(detail.threadId || message.id));
+          link.target = '_blank';
+          link.rel = 'noopener';
+          content.replaceChildren(text, link);
+        } catch (error) {
+          loaded = false;
+          content.textContent = error.message;
+        }
+      });
+      list.append(item);
+    }
+    more.hidden = !nextMailPage;
+    gmailStatus(list.childElementCount ? 'Connected as ' + gmailConnection.email : 'Your inbox is empty.');
+  } catch (error) {
+    if (version !== inboxVersion) return;
+    gmailStatus(error.message);
+    more.hidden = !page;
+  }
+}
+
+$('#gmailConnect').onclick = async ({ currentTarget }) => {
+  currentTarget.disabled = true;
+  try {
+    const { url } = await api('/gmail/connect', { method: 'POST' });
+    location.assign(url);
+  } catch (error) {
+    gmailStatus(error.message);
+    currentTarget.disabled = false;
+  }
+};
+$('#gmailDisconnect').onclick = async ({ currentTarget }) => {
+  currentTarget.disabled = true;
+  try {
+    const { revoked } = await api('/gmail', { method: 'DELETE' });
+    if (!revoked) toast('Gmail disconnected here. You can remove JobIntel access in your Google Account.', {
+      label: 'Google Account',
+      fn: () => window.open('https://myaccount.google.com/connections', '_blank', 'noopener'),
+    });
+    await loadGmail();
+  } catch (error) {
+    gmailStatus(error.message);
+  } finally {
+    currentTarget.disabled = false;
+  }
+};
+$('#gmailRefresh').onclick = () => loadGmailPage();
+$('#gmailMore').onclick = () => loadGmailPage(nextMailPage);
 
 let jobData = { openings: [], funding: [] };
 let jobLimit = 50;
@@ -311,11 +440,22 @@ function fillSectorFilter() {
 }
 
 // ---------- lead drawer & 5-line outreach cockpit ----------
+const pendingOutreachSaves = new Map();
+let drawerRequest = 0;
+
 async function openLead(id) {
+  const request = ++drawerRequest;
   $('#drawerWrap').classList.add('open');
   $('#drawer').innerHTML = '<div class="d-body"><div class="skeleton"></div><div class="skeleton"></div></div>';
-  const l = await api(`/leads/${id}`);
-  renderDrawer(l);
+  try {
+    await pendingOutreachSaves.get(String(id));
+    const l = await api(`/leads/${id}`);
+    if (request === drawerRequest) renderDrawer(l);
+  } catch (error) {
+    if (request !== drawerRequest) return;
+    closeDrawer();
+    toast(error.message);
+  }
 }
 
 function renderDrawer(l) {
@@ -324,7 +464,7 @@ function renderDrawer(l) {
   const e = l.enrichment;
   const draftSubject = l.outreachSubject || `Quick note re: ${l.name} / ${l.contact?.name || 'founding team'}`;
   const draftBody = l.emailDraft || l.pitch || '';
-  const primaryEmail = l.contact?.email || l.contacts?.find((c) => c.email)?.email || l.inboxes?.[0] || '';
+  const primaryEmail = l.contact?.email || l.contacts?.find((c) => c.email && !c.dnc)?.email || l.inboxes?.[0] || '';
 
   $('#drawer').innerHTML = `
   <div class="d-head">
@@ -350,22 +490,33 @@ function renderDrawer(l) {
         <span class="muted small">${l.applicationStatus === 'sent' ? `Sent ${fmtDate(l.sentAt)}` : ''}</span>
       </div>
       <div class="outreach-fields">
-        <div style="display:flex;gap:10px;margin-bottom:8px;align-items:center;">
-          <span class="muted small" style="min-width:55px;">Recipient:</span>
-          <b>${esc(l.contact?.name || 'Founder/CTO')}</b>
-          ${primaryEmail ? `<a href="mailto:${esc(primaryEmail)}" class="link small">${esc(primaryEmail)}</a>` : '<span class="muted small">Email unavailable</span>'}
+        <div class="outreach-template">
+          <label for="dTemplate">Template</label>
+          <select class="input" id="dTemplate">
+            <option value="suggested">Based on latest signal</option>
+            <option value="intro">Founder introduction</option>
+            ${l.events.some(event => event.type === 'hiring') ? '<option value="hiring">Reply to a hiring post</option>' : ''}
+            ${l.events.some(event => event.type === 'funding') ? '<option value="funding">Funding congratulations</option>' : ''}
+            <option value="follow-up">Follow-up</option>
+          </select>
+          <button class="btn" id="dUseTemplate">Use template</button>
         </div>
+        <label class="outreach-recipient" for="dRecipient">Recipient
+          <input class="input" id="dRecipient" type="email" maxlength="254" value="${esc(primaryEmail)}">
+        </label>
         <div style="margin-bottom:8px;">
           <label class="muted small" style="display:block;margin-bottom:4px;">Subject</label>
-          <input class="input" id="dOutreachSubject" value="${esc(draftSubject)}" style="width:100%;font-weight:500;">
+          <input class="input" id="dOutreachSubject" maxlength="500" value="${esc(draftSubject)}" style="width:100%;font-weight:500;">
         </div>
         <div style="margin-bottom:12px;">
           <label class="muted small" style="display:block;margin-bottom:4px;">Message</label>
-          <textarea class="outreach-textarea" id="dOutreachBody" spellcheck="false">${esc(draftBody)}</textarea>
+          <textarea class="outreach-textarea" id="dOutreachBody" maxlength="10000" spellcheck="false">${esc(draftBody)}</textarea>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-          <button class="btn primary gmail" id="dSendGmail">Open in Gmail</button>
+          <button class="btn primary gmail" id="dSaveGmail" hidden>Save to Gmail drafts</button>
+          <button class="btn gmail" id="dSendGmail">Open in Gmail</button>
           <button class="btn" id="dCopyEmail">Copy Draft</button>
+          <a id="dConnectGmail" class="btn" href="#gmail" hidden>Connect Gmail</a>
           <button class="btn mark-sent" id="dMarkSent">${l.applicationStatus === 'sent' ? 'Sent' : 'Mark as sent'}</button>
         </div>
       </div>
@@ -403,18 +554,110 @@ function renderDrawer(l) {
   </div>`;
 
   // Bind Cockpit Actions
+  let connectedEmail;
   $('#dSendGmail').onclick = () => {
-    const to = primaryEmail;
+    const to = $('#dRecipient').value.trim();
     const su = encodeURIComponent($('#dOutreachSubject').value);
     const body = encodeURIComponent($('#dOutreachBody').value);
     const url = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(to)}&su=${su}&body=${body}`;
-    window.open(url, '_blank', 'noopener');
+    window.open(url + (connectedEmail ? '&authuser=' + encodeURIComponent(connectedEmail) : ''), '_blank', 'noopener');
   };
 
-  $('#dCopyEmail').onclick = () => {
-    const text = `Subject: ${$('#dOutreachSubject').value}\n\n${$('#dOutreachBody').value}`;
-    navigator.clipboard.writeText(text);
-    toast('Draft copied to clipboard!');
+  const subjectField = $('#dOutreachSubject');
+  const bodyField = $('#dOutreachBody');
+  const recipientField = $('#dRecipient');
+  const saveGmail = $('#dSaveGmail');
+  const connectGmail = $('#dConnectGmail');
+  connectGmail.onclick = closeDrawer;
+  api('/gmail').then(({ enabled, email }) => {
+    if (!saveGmail.isConnected) return;
+    connectedEmail = email;
+    saveGmail.hidden = !email;
+    connectGmail.hidden = !enabled || Boolean(email);
+  }).catch(() => {});
+
+  let queuedSubject = subjectField.value;
+  let queuedBody = bodyField.value;
+  let subjectEdited = false;
+  let bodyEdited = false;
+
+  function saveOutreach(subject, body) {
+    if (subject === queuedSubject && body === queuedBody) return Promise.resolve(true);
+    subjectEdited ||= subject !== queuedSubject;
+    bodyEdited ||= body !== queuedBody;
+    queuedSubject = subject;
+    queuedBody = body;
+    const fields = {};
+    if (subjectEdited) fields.outreachSubject = subject;
+    if (bodyEdited) fields.emailDraft = body;
+    const key = String(l.id);
+    const previous = pendingOutreachSaves.get(key) || Promise.resolve();
+    const saving = previous.then(async () => {
+      try {
+        await api(`/leads/${l.id}/application`, {
+          method: 'PATCH', body: fields,
+        });
+        return true;
+      } catch (error) {
+        if (pendingOutreachSaves.get(key) === saving) {
+          queuedSubject = null;
+          queuedBody = null;
+        }
+        toast(error.message);
+        return false;
+      } finally {
+        if (pendingOutreachSaves.get(key) === saving) pendingOutreachSaves.delete(key);
+      }
+    });
+    pendingOutreachSaves.set(key, saving);
+    return saving;
+  }
+  const saveEditor = () => saveOutreach(subjectField.value, bodyField.value);
+
+  $('#dUseTemplate').onclick = async ({ currentTarget }) => {
+    currentTarget.disabled = true;
+    const request = drawerRequest;
+    const template = $('#dTemplate').value;
+    const previousSubject = subjectField.value;
+    const previousBody = bodyField.value;
+    try {
+      const draft = await api(`/leads/${l.id}/outreach-draft?template=${encodeURIComponent(template)}`);
+      if (request !== drawerRequest || !currentTarget.isConnected) return;
+      if (subjectField.value !== previousSubject || bodyField.value !== previousBody) {
+        return toast('Your draft changed. Select Use template again to replace it.');
+      }
+      subjectField.value = draft.subject;
+      bodyField.value = draft.body;
+      if (await saveEditor()) toast('Template applied.');
+    } catch (error) {
+      toast(error.message);
+    } finally {
+      currentTarget.disabled = false;
+    }
+  };
+
+  saveGmail.onclick = async () => {
+    saveGmail.disabled = true;
+    try {
+      await api('/gmail/drafts', {
+        method: 'POST', body: { to: recipientField.value.trim(), subject: subjectField.value, body: bodyField.value },
+      });
+      toast('Saved to Gmail drafts.', { label: 'View Gmail', fn: () => { closeDrawer(); location.hash = 'gmail'; } });
+    } catch (error) {
+      toast(error.message);
+    } finally {
+      saveGmail.disabled = false;
+    }
+  };
+
+  $('#dCopyEmail').onclick = async () => {
+    const text = `Subject: ${subjectField.value}\n\n${bodyField.value}`;
+    try {
+      await navigator.clipboard.writeText(text);
+      toast('Draft copied to clipboard.');
+    } catch {
+      toast('Could not copy the draft. Select the text and copy it manually.');
+    }
   };
 
   $('#dMarkSent').onclick = async ({ currentTarget }) => {
@@ -422,7 +665,7 @@ function renderDrawer(l) {
     try {
       const subject = $('#dOutreachSubject').value;
       const body = $('#dOutreachBody').value;
-      await api(`/leads/${l.id}/mark-sent`, { method: 'POST', body: { subject, body } });
+      await api(`/leads/${l.id}/mark-sent`, { method: 'POST', body: { subject, body, recipient: recipientField.value.trim() } });
       toast('Marked as sent.');
       loadStats();
       const fresh = await api(`/leads/${l.id}`);
@@ -434,19 +677,8 @@ function renderDrawer(l) {
     }
   };
 
-  $('#dOutreachSubject').onblur = async (ev) => {
-    if (ev.target.value !== l.outreachSubject) {
-      await api(`/leads/${l.id}/application`, { method: 'PATCH', body: { outreachSubject: ev.target.value } });
-      l.outreachSubject = ev.target.value;
-    }
-  };
-
-  $('#dOutreachBody').onblur = async (ev) => {
-    if (ev.target.value !== l.emailDraft) {
-      await api(`/leads/${l.id}/application`, { method: 'PATCH', body: { emailDraft: ev.target.value } });
-      l.emailDraft = ev.target.value;
-    }
-  };
+  subjectField.onblur = saveEditor;
+  bodyField.onblur = saveEditor;
 
   $('#dAppStatus').onchange = async (ev) => {
     await api(`/leads/${l.id}/application`, { method: 'PATCH', body: { status: ev.target.value } });
@@ -529,6 +761,7 @@ function bindPeople(l) {
 }
 
 function closeDrawer() {
+  drawerRequest++;
   $('#drawerWrap').classList.remove('open');
   if (location.hash.includes('/')) history.replaceState(null, '', `#${state.view}`);
   if (state.view === 'leads') loadLeads(true);
@@ -919,5 +1152,50 @@ $('#logoutBtn').onclick = async () => {
     location.replace('/login');
   } catch (error) {
     toast(error.message);
+  }
+};
+
+const deleteDialog = $('#deleteAccountDialog');
+const deleteForm = $('#deleteAccountForm');
+const deleteConfirmation = $('#deleteAccountConfirmation');
+const deleteStatus = $('#deleteAccountStatus');
+const deleteButton = $('#confirmDeleteAccount');
+const cancelDelete = $('#cancelDeleteAccount');
+
+$('#openDeleteAccount').onclick = () => {
+  deleteForm.reset();
+  deleteStatus.hidden = true;
+  deleteButton.disabled = true;
+  deleteDialog.showModal();
+};
+deleteConfirmation.oninput = () => {
+  deleteButton.disabled = deleteConfirmation.value !== 'DELETE';
+};
+cancelDelete.onclick = () => deleteDialog.close();
+deleteDialog.addEventListener('cancel', event => {
+  if (cancelDelete.disabled) event.preventDefault();
+});
+deleteForm.onsubmit = async event => {
+  event.preventDefault();
+  if (deleteConfirmation.value !== 'DELETE' || cancelDelete.disabled) return;
+  accountDeletionPending = true;
+  deleteButton.disabled = true;
+  cancelDelete.disabled = true;
+  deleteConfirmation.readOnly = true;
+  deleteStatus.hidden = false;
+  deleteStatus.textContent = 'Deleting your account…';
+  try {
+    const result = await api('/account', {
+      method: 'DELETE', body: { confirmation: deleteConfirmation.value },
+    });
+    const params = new URLSearchParams({ account: result.workspaceCleanupPending ? 'pending' : 'deleted' });
+    if (!result.gmailRevoked) params.set('gmail', 'review');
+    location.replace('/login?' + params);
+  } catch (error) {
+    accountDeletionPending = false;
+    deleteStatus.textContent = error.message;
+    deleteButton.disabled = false;
+    cancelDelete.disabled = false;
+    deleteConfirmation.readOnly = false;
   }
 };

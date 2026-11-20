@@ -1,4 +1,4 @@
-import { q, tx, inCatalog, inWorkspace, getSetting, setSetting, workspaceId } from './db.js';
+import { q, tx, inCatalog, inWorkspace, getSetting, setSetting, workspaceId, retryWorkspaceDeletions } from './db.js';
 import { SEED_SOURCES, RETIRED_SOURCES } from './sources/index.js';
 import { tickSources } from './scheduler.js';
 import { processBatch, enrichLoop } from './pipeline/processor.js';
@@ -98,6 +98,11 @@ export function activateWorkspace(account) {
   if (active.size > ACTIVE_LIMIT) active.delete(active.keys().next().value);
 }
 
+export function deactivateWorkspace(id) {
+  active.delete(id);
+  bus.emit('account-deleted');
+}
+
 export async function runWorkspaceTick() {
   if (working.size >= 3) return;
   try {
@@ -137,6 +142,11 @@ export async function runWorkspaceTick() {
 }
 
 export function startWorkspaceWorker() {
+  retryWorkspaceDeletions();
   const timer = setInterval(() => void runWorkspaceTick(), 3000);
-  return () => clearInterval(timer);
+  const cleanup = setInterval(retryWorkspaceDeletions, 60_000);
+  return () => {
+    clearInterval(timer);
+    clearInterval(cleanup);
+  };
 }

@@ -1,7 +1,8 @@
+import { outreachDraft } from './outreach.js';
 import * as cheerio from 'cheerio';
 import { q, J, nowIso } from '../db.js';
 import { fetchText } from '../util/http.js';
-import { domainOf, normName, clip, fmtUsdM } from '../util/text.js';
+import { domainOf, normName, clip } from '../util/text.js';
 import { getConfig } from '../config.js';
 import * as llm from './llm.js';
 import { log } from '../bus.js';
@@ -105,56 +106,8 @@ async function findWebsite(company) {
   return null;
 }
 
-// Generates the punchy, human <5-line cold email to the founder.
 export function heuristicPitch(company, events, contact = null) {
-  const cfg = getConfig();
-  const cand = cfg.candidate || {};
-  const f = events.find((e) => e.type === 'funding');
-  const dir = events.find((e) => e.type === 'directory');
-  const h = events.find((e) => e.type === 'hiring');
-
-  const founderName = contact?.name ? contact.name.split(/\s+/)[0] : 'there';
-  const roleName = cand.targetRoles?.[0] || 'software engineer';
-
-  // 1. Hook
-  let hook;
-  const latestTrigger = events.find(e => ['funding', 'hiring', 'directory'].includes(e.type));
-  if (latestTrigger?.type === 'hiring') {
-    hook = `I saw your hiring post, “${h.title}”, and wanted to ask about joining ${company.name}.`;
-  } else if (f) {
-    const amt = f.amount_usd_m ? fmtUsdM(f.amount_usd_m) : f.amount_text || '';
-    hook = `Saw that ${company.name} just raised a ${f.stage || 'funding'} round${amt ? ` (${amt})` : ''} — huge congratulations!`;
-  } else if (dir) {
-    hook = `Saw ${company.name} is part of Y Combinator — big congrats on the launch!`;
-  } else {
-    hook = `Came across ${company.name} recently and was really impressed by what your team is building.`;
-  }
-
-  // 2. Value + Proof
-  const skillsStr = (cand.skills || ['TypeScript', 'React', 'Node.js']).slice(0, 3).join(', ');
-  const links = [cand.portfolioUrl && `Portfolio: ${cand.portfolioUrl}`, cand.githubUrl && `GitHub: ${cand.githubUrl}`].filter(Boolean).join(' | ');
-  const value = `I'm interested in ${latestTrigger?.type === 'hiring' ? 'this opening' : roleName.toLowerCase() + ' opportunities'} and work primarily with ${skillsStr}. I build fast, scalable web apps and love early-stage teams where speed matters.`;
-  const proof = links ? `Quick proof of work: ${links}` : '';
-
-  // 3. CTA
-  const cta = `Would you be open to a quick 10-minute chat this week to see if I'd be a strong fit for your team?`;
-
-  const lines = [
-    `Hi ${founderName},`,
-    '',
-    hook,
-    '',
-    value,
-    proof ? '' : null,
-    proof || null,
-    '',
-    cta,
-    '',
-    `Best,\n${cand.name || 'Candidate'}`
-  ].filter((x) => x !== null);
-  const subject = latestTrigger?.type === 'hiring' ? `your opening at ${company.name}` : f ? `congrats on the ${f.stage || 'funding'} round / ${roleName.toLowerCase()}` : `engineer interested in ${company.name}`;
-
-  return { subject, body: lines.join('\n') };
+  return outreachDraft(company, events, getConfig().candidate || {}, contact);
 }
 
 async function llmPitch(company, events, enr, contact) {

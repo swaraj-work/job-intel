@@ -43,7 +43,7 @@ function readCookie(req, name) {
 export function currentSession(req, secure) {
   const value = readCookie(req, sessionCookie(secure));
   return value && db.prepare(`
-    SELECT u.id, u.email, u.name, s.token_hash, s.expires_at
+    SELECT u.id, u.email, u.name, u.google_sub, s.token_hash, s.expires_at
     FROM sessions s JOIN users u ON u.id = s.user_id
     WHERE s.token_hash = ? AND s.expires_at > ?
   `).get(digest(value), Date.now());
@@ -53,13 +53,24 @@ export function sessionActive(hash) {
   return Boolean(db.prepare('SELECT 1 FROM sessions WHERE token_hash = ? AND expires_at > ?').get(hash, Date.now()));
 }
 
+function cookieOptions(secure) {
+  return { httpOnly: true, secure, sameSite: 'lax', path: '/' };
+}
+
+export function clearAccountCookies(req, res, secure) {
+  const browser = readCookie(req, loginCookie(secure));
+  if (browser) db.prepare('DELETE FROM login_attempts WHERE browser_hash = ?').run(digest(browser));
+  res.clearCookie(loginCookie(secure), cookieOptions(secure));
+  res.clearCookie(sessionCookie(secure), cookieOptions(secure));
+}
+
 export function createAuth({ origin, clientId, clientSecret, client }) {
   const routes = express.Router();
   const appUrl = new URL(origin);
   const secure = appUrl.protocol === 'https:';
   const sessionName = sessionCookie(secure);
   const loginName = loginCookie(secure);
-  const cookie = { httpOnly: true, secure, sameSite: 'lax', path: '/' };
+  const cookie = cookieOptions(secure);
   const callback = new URL('/auth/google/callback', origin).href;
   const google = client || new OAuth2Client({ clientId, clientSecret, redirectUri: callback, transporterOptions: { timeout: 12_000 } });
   const enabled = Boolean(clientId && clientSecret);

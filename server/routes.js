@@ -1,7 +1,8 @@
+import { outreachDraft } from './pipeline/outreach.js';
 import { isEnterpriseName } from './pipeline/extract.js';
 import { matchOpening, fundingSignal, profileMatch } from './pipeline/opportunities.js';
 import express from 'express';
-import { q, J, nowIso, getSetting, setSetting, tx } from './db.js';
+import { q, J, nowIso, getSetting, setSetting, tx, WorkspaceDeletedError } from './db.js';
 import { getConfig, saveConfig, resetConfig, DEFAULT_CONFIG } from './config.js';
 import { computeScore, rescore, rescoreAll } from './pipeline/score.js';
 import { enrichCompany, heuristicPitch } from './pipeline/enrich.js';
@@ -22,7 +23,7 @@ import { companySnapshot, cachedSnapshot, findDecisionMakers, findLinkedIn, usag
 import { fetchTraction, cachedTraction, usageToday, configured as tractionConfigured, ApiError as TractionError } from './pipeline/traction.js';
 
 export const api = express.Router();
-const wrap = (fn) => (req, res) => Promise.resolve().then(() => fn(req, res)).catch((e) => res.status(400).json({ error: e.message }));
+const wrap = (fn) => (req, res) => Promise.resolve().then(() => fn(req, res)).catch((e) => res.status(e instanceof WorkspaceDeletedError ? 410 : 400).json({ error: e.message }));
 const actionLimit = (req, res, key, max, ms) => {
   if (rateLimit(`action:${req.account.id}:${key}`, max, ms)) return true;
   res.status(429).json({ error: 'Please wait before trying again' });
@@ -338,6 +339,18 @@ api.get('/leads/:id', wrap((req, res) => {
   });
 }));
 
+api.get('/leads/:id/outreach-draft', wrap((req, res) => {
+  const company = q.get('SELECT * FROM companies WHERE id = ?', req.params.id);
+  if (!company) return res.status(404).json({ error: 'Not found' });
+  const events = q.all('SELECT * FROM events WHERE company_id = ? ORDER BY occurred_at DESC, id DESC', company.id);
+  const contacts = contactsOf(company.id);
+  const primaryId = targetPlan(company, contacts).primaryId;
+  const contact = contacts.find(person => person.id === primaryId);
+  const draft = outreachDraft(company, events, getConfig().candidate || {}, contact, req.query.template);
+  if (!draft) return res.status(400).json({ error: 'This template is unavailable for this company.' });
+  res.json(draft);
+}));
+
 // ---------- contacts ----------
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i;
 
@@ -404,13 +417,20 @@ api.post('/leads/:id/mark-sent', wrap((req, res) => {
   if (!c) return res.status(404).json({ error: 'Not found' });
   const contacts = contactsOf(c.id);
   const plan = targetPlan(c, contacts);
-  const primary = contacts.find((x) => x.id === plan.primaryId) || contacts[0];
+  const supplied = req.body?.recipient;
+  if (supplied != null && (typeof supplied !== 'string' || supplied.length > 254 || (supplied && !EMAIL_RE.test(supplied)))) {
+    return res.status(400).json({ error: 'Enter a valid recipient email address.' });
+  }
+  const primary = supplied != null
+    ? contacts.find(contact => contact.email?.toLowerCase() === supplied.toLowerCase())
+    : contacts.find(contact => contact.id === plan.primaryId) || contacts[0];
+  const recipient = supplied != null ? supplied || null : primary?.email || null;
   const subject = cleanText(req.body?.subject, 500) || c.outreach_subject || c.pitch_subject;
   const body = cleanText(req.body?.body, 10_000) || c.email_draft || c.pitch;
   if (c.application_status === 'sent') {
     const recent = q.get(`SELECT sent_at FROM outreach_log WHERE company_id = ? AND subject IS ? AND body IS ?
       AND recipient_email IS ? AND sent_at >= ? ORDER BY sent_at DESC LIMIT 1`,
-    c.id, subject, body, primary?.email || null, new Date(Date.now() - 60_000).toISOString());
+    c.id, subject, body, recipient, new Date(Date.now() - 60_000).toISOString());
     if (recent) return res.json({ ok: true, sentAt: recent.sent_at });
   }
   const now = nowIso();
@@ -418,7 +438,7 @@ api.post('/leads/:id/mark-sent', wrap((req, res) => {
   tx(() => {
     q.run(`UPDATE companies SET application_status = 'sent', sent_at = ?, updated_at = ? WHERE id = ?`, now, now, c.id);
     q.run(`INSERT INTO outreach_log(company_id, contact_id, status, subject, body, recipient_email, sent_at) VALUES(?,?,?,?,?,?,?)`,
-      c.id, primary?.id || null, 'sent', subject, body, primary?.email || null, now);
+      c.id, primary?.id || null, 'sent', subject, body, recipient, now);
   });
 
   log('outreach', `Cold email marked sent to ${c.name} (${primary?.name || 'Founder'})`);
@@ -430,16 +450,22 @@ api.patch('/leads/:id/application', wrap((req, res) => {
   const c = q.get('SELECT * FROM companies WHERE id = ?', req.params.id);
   if (!c) return res.status(404).json({ error: 'Not found' });
   const { status, notes, emailDraft, outreachSubject, followUpAt } = req.body || {};
-  if (status && ['new', 'sent', 'replied', 'interview', 'offer', 'rejected', 'archived'].includes(status)) {
-    q.run(`UPDATE companies SET application_status = ?, updated_at = ? WHERE id = ?`, status, nowIso(), c.id);
-    if (status === 'sent') {
-      q.run(`UPDATE companies SET sent_at = COALESCE(sent_at, ?) WHERE id = ?`, nowIso(), c.id);
-    }
+  if ((typeof emailDraft === 'string' && emailDraft.length > 10_000) ||
+      (typeof outreachSubject === 'string' && outreachSubject.length > 500)) {
+    return res.status(400).json({ error: 'Use up to 500 characters for the subject and 10,000 for the message.' });
   }
-  if (typeof notes === 'string') q.run(`UPDATE companies SET notes = ?, updated_at = ? WHERE id = ?`, notes, nowIso(), c.id);
-  if (typeof emailDraft === 'string') q.run(`UPDATE companies SET email_draft = ?, updated_at = ? WHERE id = ?`, emailDraft, nowIso(), c.id);
-  if (typeof outreachSubject === 'string') q.run(`UPDATE companies SET outreach_subject = ?, updated_at = ? WHERE id = ?`, outreachSubject, nowIso(), c.id);
-  if (typeof followUpAt === 'string') q.run(`UPDATE companies SET follow_up_at = ?, updated_at = ? WHERE id = ?`, followUpAt, nowIso(), c.id);
+  tx(() => {
+    if (status && ['new', 'sent', 'replied', 'interview', 'offer', 'rejected', 'archived'].includes(status)) {
+      q.run(`UPDATE companies SET application_status = ?, updated_at = ? WHERE id = ?`, status, nowIso(), c.id);
+      if (status === 'sent') {
+        q.run(`UPDATE companies SET sent_at = COALESCE(sent_at, ?) WHERE id = ?`, nowIso(), c.id);
+      }
+    }
+    if (typeof notes === 'string') q.run(`UPDATE companies SET notes = ?, updated_at = ? WHERE id = ?`, notes, nowIso(), c.id);
+    if (typeof emailDraft === 'string') q.run(`UPDATE companies SET email_draft = ?, updated_at = ? WHERE id = ?`, emailDraft, nowIso(), c.id);
+    if (typeof outreachSubject === 'string') q.run(`UPDATE companies SET outreach_subject = ?, updated_at = ? WHERE id = ?`, outreachSubject, nowIso(), c.id);
+    if (typeof followUpAt === 'string') q.run(`UPDATE companies SET follow_up_at = ?, updated_at = ? WHERE id = ?`, followUpAt, nowIso(), c.id);
+  });
   res.json({ ok: true });
 }));
 
@@ -720,6 +746,7 @@ api.get('/stream', (req, res) => {
     if (sessionActive(req.account.token_hash)) handler(data);
     else res.end();
   }));
+  subscriptions.push(bus.on('account-deleted', () => res.end()));
   const ping = setInterval(() => {
     if (sessionActive(req.account.token_hash)) res.write(': ping\n\n');
     else res.end();

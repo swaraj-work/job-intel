@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { q, J, workspaceId } from './db.js';
+import { q, J, workspaceId, WorkspaceDeletedError } from './db.js';
 
 const events = new EventEmitter();
 events.setMaxListeners(0);
@@ -16,8 +16,13 @@ export const bus = {
 
 export function log(type, msg, data) {
   const entry = { ts: new Date().toISOString(), type, msg, ...(data ? { data } : {}) };
-  q.run('INSERT INTO activity (entry) VALUES (?)', JSON.stringify(entry));
-  q.run('DELETE FROM activity WHERE id <= (SELECT MAX(id) - 400 FROM activity)');
+  try {
+    q.run('INSERT INTO activity (entry) VALUES (?)', JSON.stringify(entry));
+    q.run('DELETE FROM activity WHERE id <= (SELECT MAX(id) - 400 FROM activity)');
+  } catch (error) {
+    if (error instanceof WorkspaceDeletedError) return;
+    throw error;
+  }
   bus.emit('activity', entry);
   if (!workspaceId() && process.env.QUIET !== '1') {
     console.log(`[${entry.ts.slice(11, 19)}] ${type.padEnd(8)} ${msg}`);

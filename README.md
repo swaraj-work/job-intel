@@ -67,7 +67,7 @@ Copy `.env.example` to `.env`:
 ```bash
 cp .env.example .env
 ```
-In Google Cloud, create a **Web application** OAuth client with an external audience and publish the app to allow general Google-account signups. Register `http://localhost:4300/auth/google/callback` for local development and `https://YOUR-DOMAIN/auth/google/callback` for deployment. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and the production `APP_ORIGIN` in the service environment. Railway’s public service domain is used when `APP_ORIGIN` is unset. The sign-in flow requests identity permissions. The existing **Open in Gmail** action opens a draft in Gmail.
+In Google Cloud, create a **Web application** OAuth client with an external audience and publish the app to allow general Google-account signups. Register `http://localhost:4300/auth/google/callback` for local development and `https://YOUR-DOMAIN/auth/google/callback` for deployment. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and the production `APP_ORIGIN` in the service environment. Railway’s public service domain is used when `APP_ORIGIN` is unset. The sign-in flow requests identity permissions. The **Open in Gmail** action opens a pre-filled compose window.
 
 Key configuration options:
 - `PORT`: Server port (default: `4300`)
@@ -84,6 +84,22 @@ Open [http://localhost:4300](http://localhost:4300) in your browser. Run `npm te
 If Railway's install step reports the npm production config warning, remove `NPM_CONFIG_PRODUCTION` from the service variables and use `NPM_CONFIG_OMIT=dev` for production-only installs.
 
 ---
+
+## Delete your account
+
+Open **Profile → Delete account** and type `DELETE` to confirm. JobIntel deletes the workspace and signs you out on all devices. Signing in again creates a fresh workspace. JobIntel attempts to revoke any connected Gmail grant. If Google cannot complete the revocation, the sign-in page links to your Google Account connections.
+
+## Connect Gmail and write outreach
+
+Use the **Gmail** tab to connect the same Google account used for sign-in, read recent inbox messages, and open Gmail for messages that need HTML rendering or attachments. Gmail access is optional. The app keeps mail in Gmail and stores the encrypted refresh token in the account’s workspace.
+
+In **Company & outreach**, choose a template based on the latest signal, a founder introduction, a hiring post, funding, or a follow-up. Templates use your candidate profile and the company’s recorded signals. Edit the recipient, subject, and message, then choose **Save to Gmail drafts**. Review and send the message in Gmail, and use **Mark as sent** to update JobIntel.
+
+To enable the integration:
+
+1. Create a dedicated Google OAuth **Web application** client, preferably in a separate Cloud project from sign-in. Enable the Gmail API and register the exact callback for each environment, such as `http://localhost:4300/api/gmail/callback` or `https://YOUR-DOMAIN/api/gmail/callback`.
+2. Set `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, and `GMAIL_TOKEN_KEY`. Generate the key with `openssl rand -base64 32` and keep it stable across restarts. Changing it requires users to reconnect.
+3. Configure Google consent for `gmail.readonly` and `gmail.compose`. With an external consent screen in testing, add the accounts that will test it. These are restricted scopes, so complete Google’s applicable verification and security assessment for a public rollout. [Gmail scopes and verification](https://developers.google.com/workspace/gmail/api/auth/scopes)
 
 ## Scoring Model (Opportunity Fit)
 

@@ -35,6 +35,8 @@ a.go:focus-visible{outline:2px solid var(--blue);outline-offset:3px}
   <main class="card">
     <h1>Sign in to JobIntel</h1>
     <p>Find engineering jobs and track applications in your own workspace.</p>
+    <p id="accountResult" role="status" hidden></p>
+    <p id="gmailReview" hidden>To remove the Gmail grant, review <a href="https://myaccount.google.com/connections" target="_blank" rel="noopener">your Google Account connections</a>.</p>
     <p class="err" id="err" role="alert" hidden></p>
     <a class="go" href="/auth/google">Continue with Google</a>
   </main>
@@ -45,7 +47,17 @@ const errors = {
   invalid: 'This sign-in attempt ended or expired. Start again.',
   failed: 'Google sign-in failed. Try again.'
 };
-const error = new URLSearchParams(location.search).get('error');
+const params = new URLSearchParams(location.search);
+const account = params.get('account');
+if (account === 'deleted' || account === 'pending') {
+  const result = document.getElementById('accountResult');
+  result.textContent = account === 'deleted'
+    ? 'Your JobIntel account and workspace were deleted.'
+    : 'Your JobIntel account was deleted. Workspace file cleanup is pending and will retry automatically.';
+  result.hidden = false;
+  document.getElementById('gmailReview').hidden = params.get('gmail') !== 'review';
+}
+const error = params.get('error');
 if (Object.hasOwn(errors, error)) {
   const message = document.getElementById('err');
   message.textContent = errors[error];

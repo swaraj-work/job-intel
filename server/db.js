@@ -7,6 +7,7 @@ import path from 'node:path';
 const DB_PATH = process.env.DB_PATH
   || (process.env.RAILWAY_VOLUME_MOUNT_PATH && path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'jobintel.db'))
   || path.resolve('data/jobintel.db');
+const WORKSPACE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const scope = new AsyncLocalStorage();
 const workspaces = new Map();
 const workspaceDir = path.resolve(process.env.WORKSPACE_DIR || `${DB_PATH}.workspaces`);
@@ -14,7 +15,7 @@ const workspaceDir = path.resolve(process.env.WORKSPACE_DIR || `${DB_PATH}.works
 export const workspaceId = () => scope.getStore() || null;
 
 export function inWorkspace(id, fn) {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id)) throw new Error('Invalid workspace ID');
+  if (!WORKSPACE_ID.test(id)) throw new Error('Invalid workspace ID');
   return scope.run(id, fn);
 }
 
@@ -270,16 +271,56 @@ CREATE INDEX IF NOT EXISTS idx_outreach_company ON outreach_log(company_id);
     status TEXT NOT NULL CHECK (status IN ('saved','applied','dismissed'))
   );
 `);
-  if (catalog) db.exec("INSERT OR IGNORE INTO settings VALUES ('multi_user_catalog', 'true')");
+  if (catalog) db.exec(`
+    PRAGMA secure_delete = ON;
+    INSERT OR IGNORE INTO settings VALUES ('multi_user_catalog', 'true');
+    CREATE TABLE IF NOT EXISTS pending_workspace_deletions (id TEXT PRIMARY KEY);
+  `);
   return db;
 }
 
 export const db = openDatabase(DB_PATH, true);
 
+export class WorkspaceDeletedError extends Error {
+  constructor() { super('This account has been deleted.'); }
+}
+
+export function workspaceExists(id) {
+  return Boolean(db.prepare('SELECT 1 FROM users WHERE id = ?').get(id));
+}
+
+function workspaceFilename(id) {
+  if (!WORKSPACE_ID.test(id)) throw new Error('Invalid workspace ID');
+  return path.join(workspaceDir, `${id}.db`);
+}
+
+export function purgeWorkspace(id) {
+  const filename = workspaceFilename(id);
+  const connection = workspaces.get(id);
+  workspaces.delete(id);
+  try {
+    connection?.close();
+    for (const suffix of ['-wal', '-shm', '-journal', '']) fs.rmSync(filename + suffix, { force: true });
+    db.prepare('DELETE FROM pending_workspace_deletions WHERE id = ?').run(id);
+    return true;
+  } catch (error) {
+    console.error('Workspace deletion will be retried:', error.code || 'cleanup failed');
+    return false;
+  }
+}
+
+export function retryWorkspaceDeletions() {
+  for (const { id } of db.prepare('SELECT id FROM pending_workspace_deletions').all()) purgeWorkspace(id);
+}
+
 function workspaceDatabase() {
   const id = workspaceId();
   if (!id) return db;
-  const connection = workspaces.get(id) || openDatabase(path.join(workspaceDir, `${id}.db`));
+  let connection = workspaces.get(id);
+  if (!connection) {
+    if (!workspaceExists(id)) throw new WorkspaceDeletedError();
+    connection = openDatabase(workspaceFilename(id));
+  }
   workspaces.delete(id);
   workspaces.set(id, connection);
   if (workspaces.size > 32) {
